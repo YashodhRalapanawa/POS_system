@@ -3,11 +3,31 @@ import heroImg from './assets/hero.png'
 import reactLogo from './assets/react.svg'
 import viteLogo from './assets/vite.svg'
 import './App.css'
+<<<<<<< Updated upstream
+=======
+import { BrowserRouter, Route, Routes } from 'react-router-dom'
+import { useEffect } from 'react'
+import AppShell from './components/AppShell'
+import LoginPage from './components/auth/LoginPage'
+import SignUpPage from './components/auth/SignUpPage'
+import ForgotPasswordPage from './components/auth/ForgotPasswordPage'
+import ProtectedRoute, { PublicOnlyRoute } from './components/auth/ProtectedRoute'
+import { AuthProvider } from './context/AuthContext'
+import { paths } from './routes'
+import { applyTheme, getSavedThemeName } from './data/themeConfig'
+>>>>>>> Stashed changes
+
+const publicRoutes = [
+  { path: paths.login, element: <LoginPage /> },
+  { path: paths.signup, element: <SignUpPage /> },
+  { path: paths.forgotPassword, element: <ForgotPasswordPage /> },
+]
 
 function App() {
   const [count, setCount] = useState(0)
 
   return (
+<<<<<<< Updated upstream
     <>
       <section id="center">
         <div className="hero">
@@ -116,6 +136,31 @@ function App() {
       <div className="ticks"></div>
       <section id="spacer"></section>
     </>
+=======
+    <AuthProvider>
+      <BrowserRouter>
+        <Routes>
+          {/* Public auth pages render outside the shell (no Sidebar/Topbar). */}
+          {publicRoutes.map((route) => (
+            <Route
+              key={route.path}
+              path={route.path}
+              element={<PublicOnlyRoute>{route.element}</PublicOnlyRoute>}
+            />
+          ))}
+          {/* Every existing app route lives inside AppShell and requires a session. */}
+          <Route
+            path="*"
+            element={
+              <ProtectedRoute>
+                <AppShell />
+              </ProtectedRoute>
+            }
+          />
+        </Routes>
+      </BrowserRouter>
+    </AuthProvider>
+>>>>>>> Stashed changes
   )
 }
 
