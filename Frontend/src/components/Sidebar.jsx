@@ -63,16 +63,6 @@ function Sidebar() {
           ))}
         </nav>
       </div>
-
-      <div className="sidebar__footer">
-        <div className="register-indicator">
-          <span className="register-indicator__label">Register #03</span>
-          <span className="register-indicator__meta">Sarah Jenkins</span>
-        </div>
-        <button type="button" className="sidebar__logout">
-          End Shift &amp; Logout
-        </button>
-      </div>
     </aside>
   )
 }
