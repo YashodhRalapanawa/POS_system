@@ -157,15 +157,34 @@ The Vite dev server will start at `http://localhost:5173`.
 
 ## 🔐 Environment Configuration
 
-Create a `.env` file inside the `Backend/` directory when configuring environment variables:
+Create `Backend/.env` using `Backend/.env.example`:
 
 ```env
+# Backend/.env
 PORT=3000
 SUPABASE_URL=your_supabase_project_url
-SUPABASE_KEY=your_supabase_anon_or_service_key
+SUPABASE_ANON_KEY=your_supabase_anon_key
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key   # server-side only
+FRONTEND_URL=http://localhost:5173
 ```
 
-> **Note:** `.env` files are excluded from Git by [.gitignore](file:///Users/yashodhralapanawa/Desktop/POS_system/.gitignore). Do not commit sensitive keys.
+Then apply the migrations in `Backend/supabase/migrations/` in order, skipping the superseded `202610050001_pos_schema.sql` (Supabase SQL Editor or `supabase db push`): `202610060001_pos_schema_v2.sql`, `202610060002_advisor_fixes.sql` (indexes, locks down `username_available`) and `202610060003_staff_profiles.sql` (staff accounts get their profile from `create_staff_profile()`). The v2 migration creates the POS tables, seeds the Admin / Manager / Cashier roles and their 19 permissions, enables per-store row-level security, and adds a trigger that creates the business, store, settings, first register, Admin profile and walk-in customer on sign-up. It moves the tables from the earlier draft migration (`202610050001_pos_schema.sql`) into the `legacy_v1` schema.
+
+Authentication uses Supabase Auth through the backend:
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /api/auth/signup` | Register a business and its first Admin (does not sign in) |
+| `POST /api/auth/login` | Sign in with email or username; Inactive/Locked accounts are refused |
+| `POST /api/auth/refresh` | Exchange a refresh token for a new session |
+| `GET /api/auth/me` | Current user, role, store, permissions and preferences |
+| `POST /api/auth/logout` | Record sign-out and revoke the session |
+| `POST /api/auth/forgot-password` | Email a password-reset link |
+| `POST /api/auth/reset-password` | Set a new password from the reset link |
+| `POST /api/auth/change-password` | Change password from My Profile |
+| `POST /api/users` | Admin creates a staff account (Admin, Manager or Cashier) |
+
+The service-role key is only used by the backend (username sign-in, staff creation, revoking sessions). Never put it in the frontend. `.env` files are excluded from Git; keep them private.
 
 ---
 
