@@ -10,9 +10,27 @@ const defaultForm = {
   status: 'Active',
 }
 
-function UserFormModal({ isOpen, onClose, onSubmit, initialValues = null, mode = 'add', existingUsers = [] }) {
+const defaultRoleList = ['Administrator', 'Manager', 'Cashier', 'Inventory Clerk', 'Accountant']
+
+function UserFormModal({
+  isOpen,
+  onClose,
+  onSubmit,
+  initialValues = null,
+  mode = 'add',
+  existingUsers = [],
+  roleOptions = defaultRoleList,
+}) {
   const [formData, setFormData] = useState(defaultForm)
   const [error, setError] = useState('')
+
+  const availableRoles = useMemo(() => {
+    const list = Array.isArray(roleOptions) && roleOptions.length > 0 ? [...roleOptions] : [...defaultRoleList]
+    if (initialValues?.role && !list.includes(initialValues.role)) {
+      list.push(initialValues.role)
+    }
+    return list
+  }, [roleOptions, initialValues])
 
   const normalizedInitialValues = useMemo(() => {
     if (!initialValues) return null
@@ -151,11 +169,9 @@ function UserFormModal({ isOpen, onClose, onSubmit, initialValues = null, mode =
             <label>
               <span>Role</span>
               <select value={formData.role} onChange={(event) => updateField('role', event.target.value)}>
-                <option value="Administrator">Administrator</option>
-                <option value="Manager">Manager</option>
-                <option value="Cashier">Cashier</option>
-                <option value="Inventory Clerk">Inventory Clerk</option>
-                <option value="Accountant">Accountant</option>
+                {availableRoles.map((roleName) => (
+                  <option key={roleName} value={roleName}>{roleName}</option>
+                ))}
               </select>
             </label>
 

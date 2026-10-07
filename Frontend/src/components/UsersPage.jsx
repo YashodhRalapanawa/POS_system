@@ -4,7 +4,8 @@ import Card from './ui/Card'
 import Badge from './ui/Badge'
 import UserDetailsModal from './UserDetailsModal'
 import UserFormModal from './UserFormModal'
-import { mockUsers, usersRoleOptions, usersStatusOptions, usersRegisterOptions } from '../data/mockUsers'
+import RoleFormModal from './RoleFormModal'
+import { mockUsers, userRoles, usersStatusOptions, usersRegisterOptions } from '../data/mockUsers'
 
 function formatDate(value) {
   if (!value) return '—'
@@ -39,6 +40,9 @@ function getInitials(name) {
 
 function UsersPage() {
   const [users, setUsers] = useState(mockUsers)
+  const [customRoles, setCustomRoles] = useState(userRoles)
+  const [isRoleModalOpen, setIsRoleModalOpen] = useState(false)
+  const [roleAlert, setRoleAlert] = useState(null)
   const [search, setSearch] = useState('')
   const [roleFilter, setRoleFilter] = useState('All Roles')
   const [statusFilter, setStatusFilter] = useState('All Status')
@@ -48,6 +52,17 @@ function UsersPage() {
   const [viewingUser, setViewingUser] = useState(null)
   const [statusTarget, setStatusTarget] = useState(null)
   const [isConfirmOpen, setIsConfirmOpen] = useState(false)
+
+  const handleRoleCreated = (newRole) => {
+    const roleName = typeof newRole === 'string' ? newRole : newRole.name
+    if (roleName && !customRoles.includes(roleName)) {
+      setCustomRoles((prev) => [...prev, roleName])
+    }
+    setRoleAlert({
+      title: 'Role Created Successfully!',
+      message: `Role "${roleName}" is now registered and available for staff user assignment.`,
+    })
+  }
 
   const filteredUsers = useMemo(() => {
     return users.filter((user) => {
@@ -188,9 +203,19 @@ function UsersPage() {
 
         <div className="products-page__actions">
           <Button variant="secondary" type="button" onClick={handleExportUsers}>Export Users</Button>
+          <Button variant="secondary" type="button" onClick={() => setIsRoleModalOpen(true)}>+ Add Role</Button>
           <Button variant="primary" type="button" onClick={openAddModal}>+ Add User</Button>
         </div>
       </header>
+
+      {roleAlert && (
+        <div className="users-page__alert">
+          <div>
+            <strong>{roleAlert.title}</strong> {roleAlert.message}
+          </div>
+          <button type="button" onClick={() => setRoleAlert(null)} aria-label="Dismiss">×</button>
+        </div>
+      )}
 
       <section className="products-kpis users-kpis">
         <Card className="products-kpis__card">
@@ -226,7 +251,7 @@ function UsersPage() {
           </div>
 
           <select value={roleFilter} onChange={(event) => setRoleFilter(event.target.value)}>
-            {usersRoleOptions.map((option) => (
+            {['All Roles', ...customRoles].map((option) => (
               <option key={option} value={option}>{option}</option>
             ))}
           </select>
@@ -327,6 +352,14 @@ function UsersPage() {
         initialValues={editingUser}
         mode={editingUser ? 'edit' : 'add'}
         existingUsers={users}
+        roleOptions={customRoles}
+      />
+
+      <RoleFormModal
+        isOpen={isRoleModalOpen}
+        onClose={() => setIsRoleModalOpen(false)}
+        onSuccess={handleRoleCreated}
+        existingRoles={customRoles}
       />
 
       <UserDetailsModal user={viewingUser} onClose={() => setViewingUser(null)} />

@@ -4686,3 +4686,209 @@ a.topbar__user--link:focus-visible {
     gap: 4px;
   }
 }
+
+/* --------------------------------------------------------------------------
+   Role Creation & Permissions Modal Styles
+   -------------------------------------------------------------------------- */
+
+.role-form-modal {
+  width: min(780px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+}
+
+.role-modal__subtitle {
+  font-size: 0.82rem;
+  color: var(--on-surface-variant);
+  margin-top: 4px;
+}
+
+.role-permissions-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: var(--surface-container-low, #eff4ff);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg, 12px);
+  padding: 16px;
+}
+
+.role-permissions-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(116, 118, 134, 0.15);
+}
+
+.role-permissions-title {
+  font-weight: 700;
+  font-size: 0.92rem;
+  color: var(--color-text);
+  margin-right: 8px;
+}
+
+.role-permissions-badge {
+  display: inline-block;
+  background: var(--color-primary);
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  letter-spacing: 0.02em;
+}
+
+.role-permissions-select-all {
+  background: none;
+  border: none;
+  color: var(--color-primary);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm, 6px);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.role-permissions-select-all:hover {
+  background: rgba(0, 55, 176, 0.08);
+}
+
+.role-permissions-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-height: 380px;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+
+.role-perm-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.role-perm-group__title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.8rem;
+  color: var(--on-surface-variant);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.role-perm-group__count {
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: var(--color-primary);
+  background: rgba(0, 55, 176, 0.08);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+.role-perm-group__items {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+}
+
+.role-perm-chip {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: flex-start !important;
+  gap: 10px !important;
+  background: #ffffff;
+  border: 1px solid rgba(116, 118, 134, 0.18);
+  border-radius: var(--radius-md, 8px);
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: all 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.03);
+  user-select: none;
+}
+
+.role-perm-chip:hover {
+  border-color: rgba(0, 55, 176, 0.4);
+  background: #fbfdff;
+  transform: translateY(-1px);
+}
+
+.role-perm-chip--active {
+  border-color: var(--color-primary);
+  background: #f4f7ff;
+  box-shadow: 0 2px 6px rgba(0, 55, 176, 0.1);
+}
+
+.role-perm-chip input[type='checkbox'] {
+  margin-top: 3px;
+  cursor: pointer;
+  accent-color: var(--color-primary);
+  width: 15px;
+  height: 15px;
+}
+
+.role-perm-chip__content {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.role-perm-chip__label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-text);
+  line-height: 1.3;
+}
+
+.role-perm-chip__desc {
+  font-size: 0.72rem;
+  color: var(--on-surface-variant);
+  line-height: 1.25;
+}
+
+.users-page__alert {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: rgba(5, 150, 105, 0.1);
+  border: 1px solid rgba(5, 150, 105, 0.28);
+  color: #065f46;
+  padding: 12px 16px;
+  border-radius: var(--radius-lg, 10px);
+  margin-bottom: 16px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  animation: slideDown 0.25s ease-out;
+}
+
+.users-page__alert strong {
+  color: #047857;
+  font-weight: 700;
+}
+
+.users-page__alert button {
+  background: none;
+  border: none;
+  font-size: 1.1rem;
+  color: #065f46;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
