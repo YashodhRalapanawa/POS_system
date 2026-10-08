@@ -38,8 +38,7 @@ The **POS System** is a full-stack web application designed to streamline daily 
 - **Production Server:** [Nginx](https://nginx.org/) (Alpine)
 
 ### Backend
-- **Runtime:** [NEXT.js](https://nodejs.org/) (v22 / v20+)
-- **Framework:** [Express 5](https://expressjs.com/)
+- **Runtime:** [NEXT.js](https://nextjs.org/) 
 - **Database / Backend as a Service:** [Supabase](https://supabase.com/) (`@supabase/supabase-js`)
 - **Utilities:** `cors`, `dotenv`
 
