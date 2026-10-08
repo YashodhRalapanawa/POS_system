@@ -1,5 +1,6 @@
-import { createServerClient, createUserClient } from "../../../../lib/supabase/server";
-import { getSupabaseAdmin, isSupabaseAdminConfigured } from "../../../../lib/supabase/admin";
+import { createServerClient, createUserClient } from "../../../../lib/supabase/server.js";
+import { getSupabaseAdmin, isSupabaseAdminConfigured } from "../../../../lib/supabase/admin.js";
+import { loadStaffProfile } from "../../../../lib/supabase/profile.js";
 
 export const dynamic = "force-dynamic";
 
@@ -70,51 +71,7 @@ async function revokeSession(accessToken) {
     }
 }
 
-async function loadProfile(db, userId) {
-    const [{ data: profile, error }, { data: permissions, error: permissionsError }] = await Promise.all([
-        db
-            .from("users")
-            .select(`
-                id, full_name, email, username, employee_code, phone, avatar_url, status,
-                last_login, created_at, all_registers,
-                role:roles (name),
-                store:stores (id, name, code),
-                preferences:user_preferences (landing_page, date_format, ask_before_printing, sale_sound, table_density)
-            `)
-            .eq("id", userId)
-            .single(),
-        db.rpc("current_user_permissions"),
-    ]);
 
-    if (error) throw error;
-    if (permissionsError) throw permissionsError;
-
-    const preferences = profile.preferences || {};
-    return {
-        id: profile.id,
-        employeeCode: profile.employee_code,
-        fullName: profile.full_name,
-        email: profile.email,
-        username: profile.username,
-        role: profile.role?.name,
-        status: profile.status,
-        storeId: profile.store?.id,
-        storeName: profile.store?.name,
-        lastLogin: profile.last_login,
-        phone: profile.phone,
-        memberSince: profile.created_at,
-        avatarUrl: profile.avatar_url,
-        allRegisters: profile.all_registers,
-        permissions: permissions || [],
-        preferences: {
-            landingPage: preferences.landing_page,
-            dateFormat: preferences.date_format,
-            askBeforePrinting: preferences.ask_before_printing,
-            saleSound: preferences.sale_sound,
-            tableDensity: preferences.table_density,
-        },
-    };
-}
 
 /**
  * Login Route Handler
@@ -199,7 +156,7 @@ export async function POST(request) {
         }
 
         // Step 6: Load full profile for frontend
-        const user = await loadProfile(db, data.user.id);
+        const user = await loadStaffProfile(db, data.user.id);
 
         return Response.json(
             {

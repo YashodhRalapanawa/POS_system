@@ -1,5 +1,5 @@
-import { extractBearerToken, verifyUserToken, createUserClient } from "../../../../lib/supabase/server";
-import { loadStaffProfile } from "../../../../lib/supabase/profile";
+import { extractBearerToken, verifyUserToken, createUserClient } from "../../../../lib/supabase/server.js";
+import { loadStaffProfile } from "../../../../lib/supabase/profile.js";
 
 export const dynamic = "force-dynamic";
 

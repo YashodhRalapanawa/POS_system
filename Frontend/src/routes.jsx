@@ -51,7 +51,7 @@ const routeDefinitions = [
   { path: paths.invoices, element: <InvoicesPage />, label: 'Invoices', permission: PERMISSIONS.INVOICES_VIEW },
   { path: paths.returns, element: <ReturnsPage />, label: 'Returns', permission: PERMISSIONS.RETURNS_VIEW },
   { path: paths.reports, element: <ReportsPage />, label: 'Reports', permission: PERMISSIONS.REPORTS_VIEW },
-  { path: paths.users, element: <UsersPage />, label: 'Users', permission: PERMISSIONS.USERS_MANAGE },
+  { path: paths.users, element: <UsersPage />, label: 'Users', permission: PERMISSIONS.USERS_VIEW },
   { path: paths.settings, element: <SettingsPage />, label: 'Settings', permission: PERMISSIONS.SETTINGS_MANAGE },
   // Own account only; open to every signed-in role. Not shown in the Sidebar.
   { path: paths.profile, element: <ProfilePage />, label: 'My Profile' },
