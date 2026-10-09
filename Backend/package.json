@@ -4,8 +4,10 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "dev": "node --watch src/server.js",
-    "start": "node src/server.js"
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "server:legacy": "node src/server.js"
   },
   "keywords": [],
   "author": "",
@@ -14,6 +16,10 @@
     "@supabase/supabase-js": "^2.117.1",
     "cors": "^2.8.6",
     "dotenv": "^18.0.3",
-    "express": "^5.2.1"
+    "express": "^5.2.1",
+    "next": "^16.4.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "server-only": "^0.0.1"
   }
 }

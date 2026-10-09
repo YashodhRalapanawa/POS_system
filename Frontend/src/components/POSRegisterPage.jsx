@@ -3,6 +3,9 @@ import Button from './ui/Button'
 import Card from './ui/Card'
 import Badge from './ui/Badge'
 import { mockCustomers, mockProducts, paymentMethods, keyShortcuts, productCategories } from '../data/mockPOS'
+import { getProducts, getProductByBarcode, getCustomers, createCustomer } from '../services/api'
+import CustomerFormModal from './CustomerFormModal'
+import { PERMISSIONS, usePermission } from '../auth/permissions'
 
 const initialCart = [
   {
@@ -33,11 +36,121 @@ function formatCurrency(value) {
 }
 
 function POSRegisterPage() {
-  const [products] = useState(mockProducts)
-  const [customers] = useState(mockCustomers)
-  const [selectedCustomerId, setSelectedCustomerId] = useState(mockCustomers[0].id)
+  const canCreateCustomer = usePermission(PERMISSIONS.CUSTOMERS_CREATE) || usePermission(PERMISSIONS.CUSTOMERS_MANAGE)
+
+  const [products, setProducts] = useState(mockProducts)
+  const [customers, setCustomers] = useState(mockCustomers)
+  const [selectedCustomerId, setSelectedCustomerId] = useState(mockCustomers[0]?.id || '')
   const [search, setSearch] = useState('')
   const [selectedCategory, setSelectedCategory] = useState('All')
+
+  const [showCustomerModal, setShowCustomerModal] = useState(false)
+  const [customerFilterText, setCustomerFilterText] = useState('')
+  const [showAddCustomerModal, setShowAddCustomerModal] = useState(false)
+  const [isCreatingCustomer, setIsCreatingCustomer] = useState(false)
+  const [addCustomerError, setAddCustomerError] = useState('')
+
+  useEffect(() => {
+    let isMounted = true
+
+    // Fetch active products
+    getProducts({ status: 'Active', all: true })
+      .then((res) => {
+        if (!isMounted) return
+        if (res?.ok && res.data?.success) {
+          const list = res.data.data?.products || []
+          if (Array.isArray(list) && list.length > 0) {
+            const activeList = list
+              .filter((p) => p.status !== 'Inactive' && p.isActive !== false)
+              .map((p) => ({
+                id: p.id,
+                name: p.name,
+                sku: p.sku,
+                barcode: p.barcode || '',
+                price: Number(p.sellingPrice ?? 0),
+                stock: p.stock ?? 0,
+                taxRate: (Number(p.taxRate ?? 15)) / 100,
+                category: p.category || 'General',
+              }))
+            if (activeList.length > 0) {
+              setProducts(activeList)
+            }
+          }
+        }
+      })
+      .catch(() => {})
+
+    // Fetch active customers from Supabase GET /api/customers
+    getCustomers({ status: 'Active', all: true })
+      .then((res) => {
+        if (!isMounted) return
+        if (res?.ok) {
+          const list = res.data?.data?.customers || res.data?.customers
+          if (Array.isArray(list) && list.length > 0) {
+            const activeCustomers = list.filter((c) => c.status !== 'Inactive' && c.isActive !== false)
+            if (activeCustomers.length > 0) {
+              setCustomers(activeCustomers)
+              // Prioritize Walk-in Customer by default
+              const walkIn = activeCustomers.find((c) => c.isWalkIn || c.code === 'CUS-001')
+              if (walkIn) {
+                setSelectedCustomerId(walkIn.id)
+              } else {
+                setSelectedCustomerId(activeCustomers[0].id)
+              }
+            }
+          }
+        }
+      })
+      .catch(() => {})
+
+    return () => {
+      isMounted = false
+    }
+  }, [])
+
+  const fetchActiveCustomers = async (autoSelectId = null) => {
+    try {
+      const res = await getCustomers({ status: 'Active', all: true })
+      if (res?.ok) {
+        const list = res.data?.data?.customers || res.data?.customers
+        if (Array.isArray(list) && list.length > 0) {
+          const activeCustomers = list.filter((c) => c.status !== 'Inactive' && c.isActive !== false)
+          setCustomers(activeCustomers)
+          if (autoSelectId) {
+            setSelectedCustomerId(autoSelectId)
+          }
+          return activeCustomers
+        }
+      }
+    } catch {}
+    return []
+  }
+
+  const handleQuickCreateCustomer = async (formData) => {
+    setIsCreatingCustomer(true)
+    setAddCustomerError('')
+    try {
+      const res = await createCustomer(formData)
+      if (res?.ok && res.data?.success) {
+        const created = res.data.data?.customer || res.data.customer
+        setShowAddCustomerModal(false)
+        setShowCustomerModal(false)
+        if (created?.id) {
+          await fetchActiveCustomers(created.id)
+        } else {
+          await fetchActiveCustomers()
+        }
+      } else {
+        const msg = res?.data?.message || res?.error || 'Failed to create customer.'
+        setAddCustomerError(msg)
+      }
+    } catch (err) {
+      setAddCustomerError(err.message || 'Error communicating with server.')
+    } finally {
+      setIsCreatingCustomer(false)
+    }
+  }
+
   const [cart, setCart] = useState(initialCart)
   const [discountType, setDiscountType] = useState('percent')
   const [discountValue, setDiscountValue] = useState(10)
@@ -49,7 +162,16 @@ function POSRegisterPage() {
   const [showScanModal, setShowScanModal] = useState(false)
   const [scanQuery, setScanQuery] = useState('')
   const [scanError, setScanError] = useState('')
+  const [scanNotification, setScanNotification] = useState(null)
   const scanInputRef = useRef(null)
+
+  useEffect(() => {
+    if (showScanModal) {
+      setTimeout(() => {
+        scanInputRef.current?.focus()
+      }, 50)
+    }
+  }, [showScanModal])
 
   const visibleProducts = useMemo(() => {
     const value = search.trim().toLowerCase()
@@ -100,8 +222,21 @@ function POSRegisterPage() {
   const total = subtotal - discountAmount + taxAmount
   const dueAmount = Math.max(total, 0)
   const tenderedValue = Number(cashTendered || 0)
-  const changeDue = Math.max(tenderedValue - dueAmount, 0)
-  const customer = customers.find((entry) => entry.id === selectedCustomerId) || customers[0]
+  const customer = customers.find((entry) => entry.id === selectedCustomerId) || customers[0] || {
+    id: 'walk-in',
+    name: 'Walk-in Customer',
+    code: 'CUS-001',
+    phone: '',
+    isWalkIn: true,
+  }
+
+  const filteredCustomerList = useMemo(() => {
+    const q = customerFilterText.trim().toLowerCase()
+    if (!q) return customers
+    return customers.filter((c) =>
+      [c.name, c.code, c.phone, c.email].some((f) => String(f || '').toLowerCase().includes(q))
+    )
+  }, [customers, customerFilterText])
 
   const clampDiscountValue = (value, mode, currentSubtotal) => {
     const numericValue = Number(value)
@@ -248,41 +383,118 @@ function POSRegisterPage() {
     setCartValidationMessage('')
     setScanQuery('')
     setScanError('')
+    setScanNotification(null)
   }
 
-  const findProductByScan = () => {
-    const normalizedValue = scanQuery.trim()
-
-    if (!normalizedValue) {
-      setScanError('Please enter a barcode, SKU, or item code.')
+  const handleBarcodeScan = async (rawCode, isFromModal = false) => {
+    const code = String(rawCode || '').trim()
+    if (!code) {
+      if (isFromModal) setScanError('Please enter a barcode, SKU, or item code.')
       return
     }
 
-    const normalizedLookup = normalizedValue.toLowerCase()
+    try {
+      if (isFromModal) setScanError('')
 
-    const match = products.find((product) => {
-      const values = [
-        product.barcode,
-        product.sku,
-        product.itemCode,
-        product.item_code,
-        product.code,
-      ]
-        .filter(Boolean)
-        .map((entry) => String(entry).toLowerCase())
+      // 1. Query real backend barcode lookup API: GET /api/products/barcode/[barcode]
+      const res = await getProductByBarcode(code)
+      if (res?.ok && res.data?.success && res.data?.data) {
+        const prod = res.data.data
+        if (prod.status === 'Inactive' || prod.isActive === false) {
+          const inactiveMsg = `Product "${prod.name}" is inactive and cannot be selected for sales.`
+          if (isFromModal) setScanError(inactiveMsg)
+          else setScanNotification({ message: inactiveMsg, tone: 'danger' })
+          return
+        }
 
-      return values.includes(normalizedLookup) || product.name.toLowerCase().includes(normalizedLookup)
-    })
+        const cartItem = {
+          id: prod.id,
+          name: prod.name,
+          sku: prod.sku,
+          barcode: prod.barcode,
+          price: Number(prod.price ?? prod.sellingPrice ?? 0),
+          quantity: 1,
+          taxRate: (Number(prod.taxRate ?? 15)) / 100,
+          category: prod.category || 'General',
+        }
 
-    if (!match) {
-      setScanError('No product found for this barcode, SKU, or item code.')
-      return
+        addToCart(cartItem)
+
+        if (isFromModal) {
+          setShowScanModal(false)
+          setScanQuery('')
+          setScanError('')
+        } else {
+          setSearch('')
+          setScanNotification({
+            message: `Scanned & added: "${prod.name}" (${prod.barcode || prod.sku})`,
+            tone: 'success',
+          })
+          setTimeout(() => setScanNotification(null), 3000)
+        }
+        return
+      }
+
+      // Check if backend returned inactive product rejection (400)
+      if (res?.data?.message?.includes('inactive')) {
+        const inactiveMsg = res.data.message
+        if (isFromModal) setScanError(inactiveMsg)
+        else setScanNotification({ message: inactiveMsg, tone: 'danger' })
+        return
+      }
+
+      // 2. Fallback to loaded products catalogue (matching barcode or SKU)
+      const normalizedLookup = code.toLowerCase()
+      const fallbackMatch = products.find((product) => {
+        const values = [
+          product.barcode,
+          product.sku,
+          product.itemCode,
+          product.item_code,
+          product.code,
+        ]
+          .filter(Boolean)
+          .map((entry) => String(entry).toLowerCase())
+
+        return values.includes(normalizedLookup)
+      })
+
+      if (fallbackMatch) {
+        if (fallbackMatch.status === 'Inactive' || fallbackMatch.isActive === false) {
+          const inactiveMsg = `Product "${fallbackMatch.name}" is inactive and cannot be selected for sales.`
+          if (isFromModal) setScanError(inactiveMsg)
+          else setScanNotification({ message: inactiveMsg, tone: 'danger' })
+          return
+        }
+
+        addToCart(fallbackMatch)
+        if (isFromModal) {
+          setShowScanModal(false)
+          setScanQuery('')
+          setScanError('')
+        } else {
+          setSearch('')
+          setScanNotification({
+            message: `Scanned & added: "${fallbackMatch.name}"`,
+            tone: 'success',
+          })
+          setTimeout(() => setScanNotification(null), 3000)
+        }
+        return
+      }
+
+      const notFoundMsg = res?.data?.message || `No active product found for barcode "${code}".`
+      if (isFromModal) {
+        setScanError(notFoundMsg)
+      } else {
+        setScanNotification({ message: notFoundMsg, tone: 'danger' })
+        setTimeout(() => setScanNotification(null), 4000)
+      }
+    } catch {
+      const errMsg = `Failed to lookup barcode "${code}". Please try again.`
+      if (isFromModal) setScanError(errMsg)
+      else setScanNotification({ message: errMsg, tone: 'danger' })
     }
-
-    addToCart(match)
-    setShowScanModal(false)
-    setScanQuery('')
-    setScanError('')
   }
 
   const handlePaymentMethodChange = (method) => {
@@ -426,11 +638,35 @@ function POSRegisterPage() {
                   type="text"
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
-                  placeholder="Search product / SKU / barcode"
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault()
+                      if (search.trim()) {
+                        handleBarcodeScan(search.trim(), false)
+                      }
+                    }
+                  }}
+                  placeholder="Search product / SKU / scan barcode (Press Enter to scan)"
                 />
               </div>
               <Button variant="primary" type="button" onClick={() => setShowScanModal(true)}>Scan</Button>
             </div>
+
+            {scanNotification && (
+              <div
+                style={{
+                  marginTop: '0.5rem',
+                  padding: '0.5rem 0.75rem',
+                  borderRadius: '6px',
+                  fontSize: '0.875rem',
+                  fontWeight: 500,
+                  backgroundColor: scanNotification.tone === 'danger' ? 'rgba(239, 68, 68, 0.15)' : 'rgba(34, 197, 94, 0.15)',
+                  color: scanNotification.tone === 'danger' ? '#ef4444' : '#16a34a',
+                }}
+              >
+                {scanNotification.message}
+              </div>
+            )}
 
             <div className="pos-categories" aria-label="Product categories">
               {productCategories.map((category) => (
@@ -480,7 +716,7 @@ function POSRegisterPage() {
             <button type="button" className="pos-quick-action">Discount</button>
             <button type="button" className="pos-quick-action">Hold Sale</button>
             <button type="button" className="pos-quick-action">Recall</button>
-            <button type="button" className="pos-quick-action">Customer</button>
+            <button type="button" className="pos-quick-action" onClick={() => setShowCustomerModal(true)}>Customer</button>
             <button type="button" className="pos-quick-action">Receipt</button>
           </div>
 
@@ -526,18 +762,47 @@ function POSRegisterPage() {
           <div className="checkout-section">
             <div className="form-row compact-row">
               <label>Customer</label>
-              <select value={selectedCustomerId} onChange={(event) => setSelectedCustomerId(event.target.value)}>
-                {customers.map((entry) => (
-                  <option key={entry.id} value={entry.id}>
-                    {entry.name}
-                  </option>
-                ))}
-              </select>
+              <div style={{ display: 'flex', gap: '6px', width: '100%', alignItems: 'center' }}>
+                <select
+                  value={selectedCustomerId}
+                  onChange={(event) => setSelectedCustomerId(event.target.value)}
+                  style={{ flex: 1 }}
+                >
+                  {customers.map((entry) => (
+                    <option key={entry.id} value={entry.id}>
+                      {entry.name} ({entry.code}){entry.isWalkIn ? ' [Walk-in]' : ''}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="button button--secondary"
+                  style={{ padding: '0.45rem 0.65rem', fontSize: '12px', whiteSpace: 'nowrap' }}
+                  onClick={() => setShowCustomerModal(true)}
+                  title="Search and select customer"
+                >
+                  Search
+                </button>
+              </div>
             </div>
 
-            <div className="customer-box compact-box">
-              <div className="customer-box__name">{customer.name}</div>
-              <div className="customer-box__meta">{customer.phone}</div>
+            <div
+              className="customer-box compact-box"
+              style={{ cursor: 'pointer' }}
+              onClick={() => setShowCustomerModal(true)}
+              title="Click to search or change customer"
+            >
+              <div className="customer-box__name">
+                {customer.name}
+                {customer.isWalkIn && (
+                  <span style={{ fontSize: '11px', color: 'var(--color-primary, #3182ce)', marginLeft: '6px' }}>
+                    • Walk-in
+                  </span>
+                )}
+              </div>
+              <div className="customer-box__meta">
+                {customer.phone || customer.email || (customer.isWalkIn ? 'Default Walk-in Counter Account' : customer.code)}
+              </div>
             </div>
 
             <div className="discount-row compact-row">
@@ -724,7 +989,7 @@ function POSRegisterPage() {
                 onKeyDown={(event) => {
                   if (event.key === 'Enter') {
                     event.preventDefault()
-                    findProductByScan()
+                    handleBarcodeScan(scanQuery.trim(), true)
                   }
                 }}
                 placeholder="Scan or type barcode / SKU"
@@ -734,10 +999,166 @@ function POSRegisterPage() {
 
             <div className="modal__actions scan-modal__actions">
               <Button variant="secondary" type="button" onClick={() => { setShowScanModal(false); setScanError('') }}>Cancel</Button>
-              <Button variant="primary" type="button" onClick={findProductByScan}>Find Product</Button>
+              <Button variant="primary" type="button" onClick={() => handleBarcodeScan(scanQuery.trim(), true)}>Find Product</Button>
             </div>
           </div>
         </div>
+      )}
+
+      {/* POS Customer Search & Selection Modal */}
+      {showCustomerModal && (
+        <div className="modal-backdrop" onClick={() => { setShowCustomerModal(false); setCustomerFilterText('') }}>
+          <div className="modal pos-customer-modal" style={{ maxWidth: '600px' }} onClick={(event) => event.stopPropagation()}>
+            <div className="modal__header">
+              <div>
+                <span className="section-label">POS Customer Selection</span>
+                <h3>Select Customer for Sale</h3>
+              </div>
+              <button type="button" className="modal__close" onClick={() => { setShowCustomerModal(false); setCustomerFilterText('') }}>
+                ×
+              </button>
+            </div>
+
+            <div className="modal__body" style={{ maxHeight: '60vh', overflowY: 'auto' }}>
+              <div style={{ display: 'flex', gap: '8px', marginBottom: '1rem', alignItems: 'center' }}>
+                <input
+                  type="text"
+                  value={customerFilterText}
+                  onChange={(e) => setCustomerFilterText(e.target.value)}
+                  placeholder="Search customer by name, code, phone, or email..."
+                  style={{
+                    flex: 1,
+                    padding: '0.65rem 0.85rem',
+                    border: '1px solid var(--border-color, #e2e8f0)',
+                    borderRadius: '6px',
+                    fontSize: '14px',
+                  }}
+                  autoFocus
+                />
+                {canCreateCustomer && (
+                  <Button
+                    variant="primary"
+                    type="button"
+                    onClick={() => {
+                      setShowAddCustomerModal(true)
+                      setAddCustomerError('')
+                    }}
+                    style={{ whiteSpace: 'nowrap' }}
+                  >
+                    + New Customer
+                  </Button>
+                )}
+              </div>
+
+              {/* Quick Walk-in Selection */}
+              {(() => {
+                const walkInCust = customers.find((c) => c.isWalkIn || c.code === 'CUS-001')
+                if (!walkInCust) return null
+                const isSelected = selectedCustomerId === walkInCust.id
+                return (
+                  <div
+                    style={{
+                      padding: '0.75rem',
+                      marginBottom: '1rem',
+                      borderRadius: '6px',
+                      background: isSelected ? 'rgba(49, 130, 206, 0.12)' : 'var(--bg-subtle, #f7fafc)',
+                      border: isSelected ? '1px solid #3182ce' : '1px dashed var(--border-color, #cbd5e0)',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      cursor: 'pointer',
+                    }}
+                    onClick={() => {
+                      setSelectedCustomerId(walkInCust.id)
+                      setShowCustomerModal(false)
+                      setCustomerFilterText('')
+                    }}
+                  >
+                    <div>
+                      <strong>Walk-in Customer</strong>
+                      <div style={{ fontSize: '12px', color: 'var(--text-muted, #718096)' }}>
+                        Default customer account for anonymous retail transactions
+                      </div>
+                    </div>
+                    <Badge tone={isSelected ? 'success' : 'neutral'}>
+                      {isSelected ? 'Currently Selected' : 'Select Walk-in'}
+                    </Badge>
+                  </div>
+                )
+              })()}
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted, #718096)', textTransform: 'uppercase' }}>
+                  Registered Customers ({filteredCustomerList.filter((c) => !c.isWalkIn).length})
+                </span>
+
+                {filteredCustomerList.filter((c) => !c.isWalkIn).length === 0 ? (
+                  <div style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--text-muted, #718096)' }}>
+                    No registered customers match your search.
+                  </div>
+                ) : (
+                  filteredCustomerList
+                    .filter((c) => !c.isWalkIn)
+                    .map((c) => {
+                      const isSelected = selectedCustomerId === c.id
+                      return (
+                        <div
+                          key={c.id}
+                          style={{
+                            padding: '0.75rem',
+                            borderRadius: '6px',
+                            border: isSelected ? '1px solid #3182ce' : '1px solid var(--border-color, #e2e8f0)',
+                            background: isSelected ? 'rgba(49, 130, 206, 0.08)' : 'transparent',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            cursor: 'pointer',
+                            transition: 'background 0.15s ease',
+                          }}
+                          onClick={() => {
+                            setSelectedCustomerId(c.id)
+                            setShowCustomerModal(false)
+                            setCustomerFilterText('')
+                          }}
+                        >
+                          <div>
+                            <div style={{ fontWeight: 600 }}>{c.name}</div>
+                            <div style={{ fontSize: '12px', color: 'var(--text-muted, #718096)' }}>
+                              Code: {c.code} {c.phone ? `• Phone: ${c.phone}` : ''} {c.email ? `• ${c.email}` : ''}
+                            </div>
+                          </div>
+                          <Badge tone={isSelected ? 'success' : 'neutral'}>
+                            {isSelected ? 'Selected' : 'Select'}
+                          </Badge>
+                        </div>
+                      )
+                    })
+                )}
+              </div>
+            </div>
+
+            <div className="modal__actions">
+              <Button variant="secondary" type="button" onClick={() => { setShowCustomerModal(false); setCustomerFilterText('') }}>
+                Close
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Quick Customer Creation Modal */}
+      {showAddCustomerModal && (
+        <CustomerFormModal
+          isOpen={showAddCustomerModal}
+          onClose={() => {
+            setShowAddCustomerModal(false)
+            setAddCustomerError('')
+          }}
+          onSubmit={handleQuickCreateCustomer}
+          mode="add"
+          isSubmitting={isCreatingCustomer}
+          serverError={addCustomerError}
+        />
       )}
     </div>
   )

@@ -94,9 +94,13 @@ function loadAccountStore() {
 }
 
 function buildAccounts(store) {
-  return [...authUsers, ...store.registered].map((account) => {
-    const profile = store.profiles[account.id]
-    const passwordHash = store.passwordHashes[account.id]
+  const registered = Array.isArray(store?.registered) ? store.registered : []
+  const profiles = isPlainObject(store?.profiles) ? store.profiles : {}
+  const passwordHashes = isPlainObject(store?.passwordHashes) ? store.passwordHashes : {}
+
+  return [...authUsers, ...registered].map((account) => {
+    const profile = profiles[account.id]
+    const passwordHash = passwordHashes[account.id]
     return {
       ...account,
       ...(profile || {}),
@@ -385,8 +389,10 @@ function AuthProvider({ children }) {
       }
 
       setAccountStore((current) => ({
-        registered: [...current.registered, account],
-        passwordHashes: { ...current.passwordHashes, [id]: demoHash(id, admin.password) },
+        ...current,
+        registered: [...(current?.registered || []), account],
+        passwordHashes: { ...(current?.passwordHashes || {}), [id]: demoHash(id, admin.password) },
+        profiles: { ...(current?.profiles || {}) },
       }))
 
       return { ok: true, user: toSessionUser(account) }
