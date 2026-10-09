@@ -1,24 +1,25 @@
 import { NavLink } from 'react-router-dom'
-import { getRoutePermission, paths } from '../routes'
+import { paths } from '../paths'
+import { getRoutePermission } from '../routes'
 import { useAuth } from '../context/AuthContext'
 
 const primaryNav = [
-  { label: 'Dashboard', path: paths.dashboard },
-  { label: 'POS Register', path: paths.pos },
-  { label: 'Products', path: paths.products },
-  { label: 'Categories', path: paths.categories },
-  { label: 'Suppliers', path: paths.suppliers },
-  { label: 'Inventory', path: paths.inventory },
-  { label: 'Customers', path: paths.customers },
-  { label: 'Orders', path: paths.orders },
-  { label: 'Invoices', path: paths.invoices },
-  { label: 'Returns', path: paths.returns },
+  { label: 'Dashboard', path: paths.dashboard, icon: '📊' },
+  { label: 'POS Register', path: paths.pos, icon: '🛒' },
+  { label: 'Products', path: paths.products, icon: '📦' },
+  { label: 'Categories', path: paths.categories, icon: '🏷️' },
+  { label: 'Suppliers', path: paths.suppliers, icon: '🚚' },
+  { label: 'Inventory', path: paths.inventory, icon: '🏬' },
+  { label: 'Customers', path: paths.customers, icon: '👥' },
+  { label: 'Orders', path: paths.orders, icon: '🧾' },
+  { label: 'Invoices', path: paths.invoices, icon: '📄' },
+  { label: 'Returns', path: paths.returns, icon: '↩️' },
 ]
 
 const secondaryNav = [
-  { label: 'Reports', path: paths.reports },
-  { label: 'Users', path: paths.users },
-  { label: 'Settings', path: paths.settings },
+  { label: 'Reports', path: paths.reports, icon: '📈' },
+  { label: 'Users', path: paths.users, icon: '👤' },
+  { label: 'Settings', path: paths.settings, icon: '⚙️' },
 ]
 
 function Sidebar() {
@@ -44,7 +45,7 @@ function Sidebar() {
               to={item.path}
               className={({ isActive }) => `nav-item ${isActive ? 'nav-item--active' : ''}`}
             >
-              <span className="nav-item__dot" aria-hidden="true" />
+              <span className="nav-item__icon" style={{ fontSize: '16px', lineHeight: 1 }}>{item.icon}</span>
               {item.label}
             </NavLink>
           ))}
@@ -57,7 +58,7 @@ function Sidebar() {
               to={item.path}
               className={({ isActive }) => `nav-item ${isActive ? 'nav-item--active' : ''}`}
             >
-              <span className="nav-item__dot" aria-hidden="true" />
+              <span className="nav-item__icon" style={{ fontSize: '16px', lineHeight: 1 }}>{item.icon}</span>
               {item.label}
             </NavLink>
           ))}

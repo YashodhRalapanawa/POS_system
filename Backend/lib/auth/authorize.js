@@ -17,6 +17,9 @@ export const ROLES = Object.freeze({
  */
 export function normalizeRole(role) {
     if (!role) return "";
+    if (typeof role === "object" && role !== null) {
+        return String(role.code || role.name || "").trim().toUpperCase();
+    }
     return String(role).trim().toUpperCase();
 }
 
@@ -164,7 +167,11 @@ export function hasPermission(user, permissionKey) {
 
     // Direct permission check from user's assigned role permissions
     const permissions = Array.isArray(user.permissions) ? user.permissions : [];
-    if (permissions.includes(permissionKey)) {
+    if (Array.isArray(permissionKey)) {
+        if (permissionKey.some((k) => permissions.includes(k))) {
+            return true;
+        }
+    } else if (permissions.includes(permissionKey)) {
         return true;
     }
 
@@ -188,7 +195,8 @@ export function authorizePermission(user, permissionKey) {
         return { authorized: false, reason: "User account is inactive." };
     }
     if (!hasPermission(user, permissionKey)) {
-        return { authorized: false, reason: `Missing required permission: ${permissionKey}` };
+        const keyDesc = Array.isArray(permissionKey) ? permissionKey.join(" or ") : permissionKey;
+        return { authorized: false, reason: `Missing required permission: ${keyDesc}` };
     }
     return { authorized: true };
 }

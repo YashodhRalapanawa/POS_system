@@ -1,4 +1,5 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
+import { paths } from './paths'
 import DashboardPage from './components/DashboardPage'
 import PlaceholderPage from './components/PlaceholderPage'
 import POSRegisterPage from './components/POSRegisterPage'
@@ -18,26 +19,6 @@ import ProfilePage from './components/profile/ProfilePage'
 import ProtectedRoute from './components/auth/ProtectedRoute'
 import { PERMISSIONS } from './auth/permissions'
 
-const paths = {
-  login: '/login',
-  signup: '/signup',
-  forgotPassword: '/forgot-password',
-  dashboard: '/dashboard',
-  pos: '/pos',
-  products: '/products',
-  categories: '/categories',
-  suppliers: '/suppliers',
-  inventory: '/inventory',
-  customers: '/customers',
-  orders: '/orders',
-  invoices: '/invoices',
-  returns: '/returns',
-  reports: '/reports',
-  users: '/users',
-  settings: '/settings',
-  profile: '/profile',
-}
-
 // `permission` is the frontend (UX-only) guard for each screen; see src/auth/permissions.js.
 const routeDefinitions = [
   { path: paths.dashboard, element: <DashboardPage />, label: 'Dashboard', permission: PERMISSIONS.DASHBOARD_VIEW },
@@ -51,7 +32,7 @@ const routeDefinitions = [
   { path: paths.invoices, element: <InvoicesPage />, label: 'Invoices', permission: PERMISSIONS.INVOICES_VIEW },
   { path: paths.returns, element: <ReturnsPage />, label: 'Returns', permission: PERMISSIONS.RETURNS_VIEW },
   { path: paths.reports, element: <ReportsPage />, label: 'Reports', permission: PERMISSIONS.REPORTS_VIEW },
-  { path: paths.users, element: <UsersPage />, label: 'Users', permission: PERMISSIONS.USERS_MANAGE },
+  { path: paths.users, element: <UsersPage />, label: 'Users', permission: PERMISSIONS.USERS_VIEW },
   { path: paths.settings, element: <SettingsPage />, label: 'Settings', permission: PERMISSIONS.SETTINGS_MANAGE },
   // Own account only; open to every signed-in role. Not shown in the Sidebar.
   { path: paths.profile, element: <ProfilePage />, label: 'My Profile' },

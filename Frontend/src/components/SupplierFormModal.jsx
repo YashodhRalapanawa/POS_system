@@ -21,6 +21,8 @@ function SupplierFormModal({
   initialValues = null,
   mode = 'add',
   codeConflictCheck = () => false,
+  isSubmitting = false,
+  externalError = '',
 }) {
   const [formData, setFormData] = useState(defaultForm)
   const [error, setError] = useState('')
@@ -47,9 +49,10 @@ function SupplierFormModal({
 
   const handleSubmit = (event) => {
     event.preventDefault()
+    if (isSubmitting) return
 
     const cleanedName = formData.name.trim()
-    const cleanedCode = formData.code.trim()
+    const cleanedCode = formData.code.trim().toUpperCase()
     const cleanedContact = formData.contactPerson.trim()
     const cleanedEmail = formData.email.trim()
 
@@ -63,18 +66,13 @@ function SupplierFormModal({
       return
     }
 
-    if (!cleanedContact) {
-      setError('Contact person is required.')
-      return
-    }
-
-    if (!cleanedEmail) {
-      setError('Email is required.')
+    if (cleanedEmail && !/^\S+@\S+\.\S+$/.test(cleanedEmail)) {
+      setError('Please enter a valid email address.')
       return
     }
 
     if (codeConflictCheck(cleanedCode)) {
-      setError('Supplier code must be unique in the local mock data.')
+      setError('Supplier code must be unique.')
       return
     }
 
@@ -88,21 +86,27 @@ function SupplierFormModal({
       address: formData.address.trim(),
       city: formData.city.trim(),
       country: formData.country.trim(),
+      status: formData.status,
+      isActive: formData.status === 'Active',
     })
   }
 
   const title = mode === 'edit' ? 'Edit Supplier' : 'Add Supplier'
-  const actionLabel = mode === 'edit' ? 'Save Changes' : 'Create Supplier'
+  const actionLabel = isSubmitting
+    ? mode === 'edit' ? 'Saving...' : 'Creating...'
+    : mode === 'edit' ? 'Save Changes' : 'Create Supplier'
+
+  const displayedError = error || externalError
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div className="modal-backdrop" onClick={!isSubmitting ? onClose : undefined}>
       <div className="product-form-modal supplier-form-modal" onClick={(event) => event.stopPropagation()}>
         <div className="product-form-modal__header">
           <div>
             <span className="section-label">Supplier Management</span>
             <h3>{title}</h3>
           </div>
-          <button type="button" className="modal__close" onClick={onClose}>×</button>
+          <button type="button" className="modal__close" onClick={onClose} disabled={isSubmitting}>×</button>
         </div>
 
         <form className="product-form" onSubmit={handleSubmit}>
@@ -113,6 +117,8 @@ function SupplierFormModal({
                 value={formData.name}
                 onChange={(event) => updateField('name', event.target.value)}
                 placeholder="e.g. TechSource Lanka"
+                disabled={isSubmitting}
+                required
               />
             </label>
 
@@ -122,6 +128,8 @@ function SupplierFormModal({
                 value={formData.code}
                 onChange={(event) => updateField('code', event.target.value)}
                 placeholder="e.g. SUP-009"
+                disabled={isSubmitting}
+                required
               />
             </label>
 
@@ -131,12 +139,17 @@ function SupplierFormModal({
                 value={formData.contactPerson}
                 onChange={(event) => updateField('contactPerson', event.target.value)}
                 placeholder="e.g. Nimal Perera"
+                disabled={isSubmitting}
               />
             </label>
 
             <label>
               <span>Status</span>
-              <select value={formData.status} onChange={(event) => updateField('status', event.target.value)}>
+              <select
+                value={formData.status}
+                onChange={(event) => updateField('status', event.target.value)}
+                disabled={isSubmitting}
+              >
                 <option value="Active">Active</option>
                 <option value="Inactive">Inactive</option>
               </select>
@@ -148,6 +161,7 @@ function SupplierFormModal({
                 value={formData.phone}
                 onChange={(event) => updateField('phone', event.target.value)}
                 placeholder="e.g. +94 77 123 4567"
+                disabled={isSubmitting}
               />
             </label>
 
@@ -158,12 +172,17 @@ function SupplierFormModal({
                 value={formData.email}
                 onChange={(event) => updateField('email', event.target.value)}
                 placeholder="e.g. sales@supplier.example"
+                disabled={isSubmitting}
               />
             </label>
 
             <label>
               <span>Supplier Type</span>
-              <select value={formData.supplierType} onChange={(event) => updateField('supplierType', event.target.value)}>
+              <select
+                value={formData.supplierType}
+                onChange={(event) => updateField('supplierType', event.target.value)}
+                disabled={isSubmitting}
+              >
                 <option value="Manufacturer">Manufacturer</option>
                 <option value="Distributor">Distributor</option>
                 <option value="Wholesaler">Wholesaler</option>
@@ -177,6 +196,7 @@ function SupplierFormModal({
                 value={formData.country}
                 onChange={(event) => updateField('country', event.target.value)}
                 placeholder="e.g. Sri Lanka"
+                disabled={isSubmitting}
               />
             </label>
 
@@ -186,6 +206,7 @@ function SupplierFormModal({
                 value={formData.city}
                 onChange={(event) => updateField('city', event.target.value)}
                 placeholder="e.g. Colombo"
+                disabled={isSubmitting}
               />
             </label>
 
@@ -195,15 +216,16 @@ function SupplierFormModal({
                 value={formData.address}
                 onChange={(event) => updateField('address', event.target.value)}
                 placeholder="Street address or office location"
+                disabled={isSubmitting}
               />
             </label>
           </div>
 
-          {error && <div className="field-error">{error}</div>}
+          {displayedError && <div className="field-error">{displayedError}</div>}
 
           <div className="product-form__actions">
-            <Button variant="secondary" type="button" onClick={onClose}>Cancel</Button>
-            <Button variant="primary" type="submit">{actionLabel}</Button>
+            <Button variant="secondary" type="button" onClick={onClose} disabled={isSubmitting}>Cancel</Button>
+            <Button variant="primary" type="submit" disabled={isSubmitting}>{actionLabel}</Button>
           </div>
         </form>
       </div>

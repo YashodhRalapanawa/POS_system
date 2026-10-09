@@ -1,14 +1,9 @@
 import Button from './ui/Button'
 import Badge from './ui/Badge'
-
-function formatCurrency(value) {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-  }).format(value)
-}
+import { useCurrency } from '../context/CurrencyContext'
 
 function ProductDetailsModal({ product, onClose }) {
+  const { formatCurrency } = useCurrency()
   if (!product) return null
 
   return (
@@ -30,13 +25,23 @@ function ProductDetailsModal({ product, onClose }) {
 
           <div className="product-details-modal__grid">
             <div className="modal__row"><span>SKU / Item Code</span><strong>{product.sku}</strong></div>
-            <div className="modal__row"><span>Barcode</span><strong>{product.barcode}</strong></div>
-            <div className="modal__row"><span>Category</span><strong>{product.category}</strong></div>
-            <div className="modal__row"><span>Purchase Price</span><strong>{formatCurrency(product.purchasePrice)}</strong></div>
+            <div className="modal__row"><span>Barcode</span><strong>{product.barcode || 'N/A'}</strong></div>
+            <div className="modal__row"><span>Category</span><strong>{product.category || 'Unassigned'}</strong></div>
+            {product.supplier && <div className="modal__row"><span>Supplier</span><strong>{product.supplier}</strong></div>}
+            <div className="modal__row"><span>Unit of Measure</span><strong>{product.unitOfMeasure || 'PCS'}</strong></div>
+            {product.purchasePrice !== undefined && product.purchasePrice !== null && (
+              <div className="modal__row"><span>Cost Price</span><strong>{formatCurrency(product.purchasePrice)}</strong></div>
+            )}
             <div className="modal__row"><span>Selling Price</span><strong>{formatCurrency(product.sellingPrice)}</strong></div>
             <div className="modal__row"><span>Tax Rate</span><strong>{product.taxRate}%</strong></div>
             <div className="modal__row"><span>Stock</span><strong>{product.stock}</strong></div>
             <div className="modal__row"><span>Reorder Level</span><strong>{product.reorderLevel}</strong></div>
+            {product.description && (
+              <div className="modal__row" style={{ gridColumn: 'span 2' }}>
+                <span>Description</span>
+                <p style={{ margin: '0.25rem 0 0', fontWeight: 'normal', color: 'var(--text-secondary, #64748b)' }}>{product.description}</p>
+              </div>
+            )}
           </div>
         </div>
 

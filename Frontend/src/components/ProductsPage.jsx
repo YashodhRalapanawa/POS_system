@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import Button from './ui/Button'
 import Card from './ui/Card'
 import Badge from './ui/Badge'
@@ -7,23 +7,41 @@ import ProductDetailsModal from './ProductDetailsModal'
 import ProductImportModal from './ProductImportModal'
 import ProductAdvancedFiltersModal from './ProductAdvancedFiltersModal'
 import { initialProducts, productCategories, stockStatusOptions } from '../data/mockProducts'
-
-function formatCurrency(value) {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-  }).format(value)
-}
+import {
+  getCategories,
+  getSuppliers,
+  getProducts,
+  getProductById,
+  createProduct,
+  updateProduct,
+  updateProductStatus,
+} from '../services/api'
+import { useAuth } from '../context/AuthContext'
+import { PERMISSIONS, hasPermission } from '../auth/permissions'
+import { useCurrency } from '../context/CurrencyContext'
 
 function ProductsPage() {
-  const [products, setProducts] = useState(initialProducts)
+  const { user } = useAuth()
+  const { formatCurrency } = useCurrency()
+  const [products, setProducts] = useState([])
+  const [isLoading, setIsLoading] = useState(true)
+  const [apiError, setApiError] = useState(null)
+  const [notification, setNotification] = useState(null)
+
+  const [availableCategories, setAvailableCategories] = useState([])
+  const [availableSuppliers, setAvailableSuppliers] = useState([])
   const [search, setSearch] = useState('')
   const [categoryFilter, setCategoryFilter] = useState('All Categories')
+  const [supplierFilter, setSupplierFilter] = useState('All Suppliers')
   const [stockFilter, setStockFilter] = useState('All Stock Status')
+
   const [isFormOpen, setIsFormOpen] = useState(false)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [formExternalError, setFormExternalError] = useState(null)
   const [editingProduct, setEditingProduct] = useState(null)
   const [viewingProduct, setViewingProduct] = useState(null)
-  const [deleteTargetId, setDeleteTargetId] = useState(null)
+  const [statusTargetProduct, setStatusTargetProduct] = useState(null)
+
   const [isImportModalOpen, setIsImportModalOpen] = useState(false)
   const [isAdvancedFiltersOpen, setIsAdvancedFiltersOpen] = useState(false)
   const [advancedFilters, setAdvancedFilters] = useState({
@@ -33,6 +51,95 @@ function ProductsPage() {
     minStock: '',
     maxStock: '',
   })
+
+  // Permission authorization checks
+  const canViewProducts = useMemo(
+    () => hasPermission(user, PERMISSIONS.PRODUCTS_VIEW) || hasPermission(user, PERMISSIONS.PRODUCTS_MANAGE),
+    [user],
+  )
+  const canCreateProduct = useMemo(
+    () => hasPermission(user, PERMISSIONS.PRODUCTS_CREATE) || hasPermission(user, PERMISSIONS.PRODUCTS_MANAGE),
+    [user],
+  )
+  const canUpdateProduct = useMemo(
+    () => hasPermission(user, PERMISSIONS.PRODUCTS_UPDATE) || hasPermission(user, PERMISSIONS.PRODUCTS_MANAGE),
+    [user],
+  )
+
+  const showNotification = (message, tone = 'success') => {
+    setNotification({ message, tone })
+    setTimeout(() => {
+      setNotification((curr) => (curr?.message === message ? null : curr))
+    }, 4000)
+  }
+
+  const fetchProductsList = async () => {
+    setIsLoading(true)
+    setApiError(null)
+    try {
+      const res = await getProducts({ all: true })
+      if (res?.ok && res.data?.success) {
+        const fetched = res.data.data?.products || []
+        setProducts(fetched)
+      } else {
+        // Fallback to initialProducts if backend offline
+        setProducts(initialProducts)
+      }
+    } catch (err) {
+      setProducts(initialProducts)
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    let isMounted = true
+
+    if (canViewProducts) {
+      fetchProductsList()
+
+      getCategories({ all: true })
+        .then((res) => {
+          if (!isMounted) return
+          if (res?.ok) {
+            const list = res.data?.data?.categories || res.data?.categories
+            if (Array.isArray(list) && list.length > 0) {
+              setAvailableCategories(list)
+            }
+          }
+        })
+        .catch(() => {})
+
+      getSuppliers({ all: true })
+        .then((res) => {
+          if (!isMounted) return
+          if (res?.ok) {
+            const list = res.data?.data?.suppliers || res.data?.suppliers
+            if (Array.isArray(list) && list.length > 0) {
+              setAvailableSuppliers(list)
+            }
+          }
+        })
+        .catch(() => {})
+    } else {
+      setIsLoading(false)
+    }
+
+    return () => {
+      isMounted = false
+    }
+  }, [canViewProducts])
+
+  const categoryFilterOptions = useMemo(() => {
+    const apiNames = availableCategories.map((c) => c.name)
+    const combined = Array.from(new Set([...apiNames, ...productCategories.filter((c) => c !== 'All Categories')]))
+    return ['All Categories', ...combined]
+  }, [availableCategories])
+
+  const supplierFilterOptions = useMemo(() => {
+    const apiNames = availableSuppliers.map((s) => s.name)
+    return ['All Suppliers', ...apiNames]
+  }, [availableSuppliers])
 
   const activeAdvancedFilterCount = useMemo(
     () => Object.values(advancedFilters).filter((value) => value !== '').length,
@@ -47,12 +154,15 @@ function ProductsPage() {
         .includes(search.trim().toLowerCase())
 
       const matchesCategory = categoryFilter === 'All Categories' || product.category === categoryFilter
+      const matchesSupplier = supplierFilter === 'All Suppliers' || product.supplier === supplierFilter
+
       const matchesStock =
         stockFilter === 'All Stock Status' ||
-        (stockFilter === 'In Stock' && product.status === 'In Stock') ||
-        (stockFilter === 'Low Stock' && product.status === 'Low Stock') ||
-        (stockFilter === 'Out of Stock' && product.status === 'Out of Stock') ||
-        (stockFilter === 'Inactive' && product.status === 'Inactive')
+        (stockFilter === 'In Stock' && (product.status === 'In Stock' || (product.status === 'Active' && product.stock > 0))) ||
+        (stockFilter === 'Low Stock' && (product.status === 'Low Stock' || (product.stock > 0 && product.stock <= (product.reorderLevel || 5)))) ||
+        (stockFilter === 'Out of Stock' && (product.status === 'Out of Stock' || product.stock === 0)) ||
+        (stockFilter === 'Active' && (product.status === 'Active' || product.isActive)) ||
+        (stockFilter === 'Inactive' && (product.status === 'Inactive' || product.isActive === false))
 
       const minPrice = advancedFilters.minPrice === '' ? null : Number(advancedFilters.minPrice)
       const maxPrice = advancedFilters.maxPrice === '' ? null : Number(advancedFilters.maxPrice)
@@ -66,87 +176,154 @@ function ProductsPage() {
       const matchesMinStock = minStock === null || Number(product.stock) >= minStock
       const matchesMaxStock = maxStock === null || Number(product.stock) <= maxStock
 
-      return matchesSearch && matchesCategory && matchesStock && matchesMinPrice && matchesMaxPrice && matchesTaxRate && matchesMinStock && matchesMaxStock
+      return (
+        matchesSearch &&
+        matchesCategory &&
+        matchesSupplier &&
+        matchesStock &&
+        matchesMinPrice &&
+        matchesMaxPrice &&
+        matchesTaxRate &&
+        matchesMinStock &&
+        matchesMaxStock
+      )
     })
-  }, [products, search, categoryFilter, stockFilter, advancedFilters])
+  }, [products, search, categoryFilter, supplierFilter, stockFilter, advancedFilters])
 
   const totalProducts = products.length
-  const activeProducts = products.filter((product) => product.status !== 'Inactive').length
-  const lowStockCount = products.filter((product) => product.status === 'Low Stock').length
-  const outOfStockCount = products.filter((product) => product.status === 'Out of Stock').length
+  const activeProducts = products.filter((product) => product.status !== 'Inactive' && product.isActive !== false).length
+  const lowStockCount = products.filter((product) => product.status === 'Low Stock' || (product.stock > 0 && product.stock <= (product.reorderLevel || 5))).length
+  const outOfStockCount = products.filter((product) => product.status === 'Out of Stock' || product.stock === 0).length
 
   const openAddModal = () => {
     setEditingProduct(null)
+    setFormExternalError(null)
     setIsFormOpen(true)
   }
 
-  const closeAddModal = () => {
+  const closeFormModal = () => {
     setIsFormOpen(false)
     setEditingProduct(null)
+    setFormExternalError(null)
   }
 
   const openEditModal = (product) => {
     setEditingProduct(product)
+    setFormExternalError(null)
     setIsFormOpen(true)
   }
 
-  const updateProduct = (productId, updatedProduct) => {
-    setProducts((currentProducts) =>
-      currentProducts.map((product) =>
-        product.id === productId
-          ? {
-              ...product,
-              ...updatedProduct,
-              status:
-                Number(updatedProduct.stock) === 0
-                  ? 'Out of Stock'
-                  : Number(updatedProduct.stock) <= Number(updatedProduct.reorderLevel)
-                    ? 'Low Stock'
-                    : 'In Stock',
-            }
-          : product,
-      ),
+  const handleFormSubmit = async (productData) => {
+    setIsSubmitting(true)
+    setFormExternalError(null)
+
+    try {
+      if (editingProduct) {
+        // Update product via PATCH /api/products/[id]
+        const res = await updateProduct(editingProduct.id, productData)
+        if (res?.ok && res.data?.success) {
+          showNotification(`Product "${productData.name}" updated successfully.`)
+          closeFormModal()
+          fetchProductsList()
+        } else {
+          const errMsg = res?.data?.message || 'Failed to update product.'
+          setFormExternalError(errMsg)
+        }
+      } else {
+        // Create product via POST /api/products
+        const res = await createProduct(productData)
+        if (res?.ok && res.data?.success) {
+          showNotification(`Product "${productData.name}" created successfully.`)
+          closeFormModal()
+          fetchProductsList()
+        } else {
+          const errMsg = res?.data?.message || 'Failed to create product.'
+          setFormExternalError(errMsg)
+        }
+      }
+    } catch (err) {
+      setFormExternalError('Network or server error while saving product.')
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  const handleToggleStatus = async () => {
+    if (!statusTargetProduct) return
+    const isCurrentlyActive = statusTargetProduct.status !== 'Inactive' && statusTargetProduct.isActive !== false
+    const nextActive = !isCurrentlyActive
+
+    try {
+      const res = await updateProductStatus(statusTargetProduct.id, nextActive)
+      if (res?.ok && res.data?.success) {
+        showNotification(
+          `Product "${statusTargetProduct.name}" ${nextActive ? 'activated' : 'deactivated'} successfully.`
+        )
+        setStatusTargetProduct(null)
+        fetchProductsList()
+      } else {
+        showNotification(res?.data?.message || 'Failed to update product status.', 'danger')
+      }
+    } catch {
+      showNotification('Failed to communicate with server.', 'danger')
+    }
+  }
+
+  const handleViewDetails = async (product) => {
+    try {
+      const res = await getProductById(product.id)
+      if (res?.ok && res.data?.success) {
+        setViewingProduct(res.data.data)
+      } else {
+        setViewingProduct(product)
+      }
+    } catch {
+      setViewingProduct(product)
+    }
+  }
+
+  const getBadgeTone = (product) => {
+    if (product.status === 'Inactive' || product.isActive === false) return 'neutral'
+    if (product.status === 'Out of Stock' || product.stock === 0) return 'danger'
+    if (product.status === 'Low Stock' || (product.stock > 0 && product.stock <= (product.reorderLevel || 5))) return 'warning'
+    return 'success'
+  }
+
+  const getDisplayStatus = (product) => {
+    if (product.status === 'Inactive' || product.isActive === false) return 'Inactive'
+    if (product.stock === 0) return 'Out of Stock'
+    if (product.stock > 0 && product.stock <= (product.reorderLevel || 5)) return 'Low Stock'
+    return 'In Stock'
+  }
+
+  if (!canViewProducts) {
+    return (
+      <div className="products-page">
+        <Card style={{ padding: '2rem', textAlign: 'center' }}>
+          <h3>Access Restricted</h3>
+          <p>You do not have permission to view products.</p>
+        </Card>
+      </div>
     )
-  }
-
-  const addProduct = (newProduct) => {
-    const normalizedProduct = {
-      ...newProduct,
-      id: `prod-${Date.now()}`,
-      status:
-        Number(newProduct.stock) === 0
-          ? 'Out of Stock'
-          : Number(newProduct.stock) <= Number(newProduct.reorderLevel)
-            ? 'Low Stock'
-            : 'In Stock',
-    }
-
-    setProducts((currentProducts) => [normalizedProduct, ...currentProducts])
-    closeAddModal()
-  }
-
-  const removeProduct = () => {
-    if (deleteTargetId === null) return
-
-    setProducts((currentProducts) => currentProducts.filter((product) => product.id !== deleteTargetId))
-    setDeleteTargetId(null)
-  }
-
-  const getBadgeTone = (status) => {
-    switch (status) {
-      case 'In Stock':
-        return 'success'
-      case 'Low Stock':
-        return 'warning'
-      case 'Out of Stock':
-        return 'danger'
-      default:
-        return 'warning'
-    }
   }
 
   return (
     <div className="products-page">
+      {notification && (
+        <div
+          style={{
+            padding: '0.75rem 1.25rem',
+            marginBottom: '1rem',
+            borderRadius: '6px',
+            backgroundColor: notification.tone === 'danger' ? 'rgba(239, 68, 68, 0.15)' : 'rgba(34, 197, 94, 0.15)',
+            color: notification.tone === 'danger' ? '#ef4444' : '#16a34a',
+            fontWeight: 500,
+          }}
+        >
+          {notification.message}
+        </div>
+      )}
+
       <header className="products-page__header">
         <div>
           <span className="section-label">Catalog Management</span>
@@ -155,8 +332,14 @@ function ProductsPage() {
         </div>
 
         <div className="products-page__actions">
-          <Button variant="secondary" type="button" onClick={() => setIsImportModalOpen(true)}>Import Products</Button>
-          <Button variant="primary" type="button" onClick={openAddModal}>+ Add Product</Button>
+          <Button variant="secondary" type="button" onClick={() => setIsImportModalOpen(true)}>
+            Import Products
+          </Button>
+          {canCreateProduct && (
+            <Button variant="primary" type="button" onClick={openAddModal}>
+              + Add Product
+            </Button>
+          )}
         </div>
       </header>
 
@@ -191,15 +374,29 @@ function ProductsPage() {
           </div>
 
           <select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}>
-            {productCategories.map((category) => (
-              <option key={category} value={category}>{category}</option>
+            {categoryFilterOptions.map((category) => (
+              <option key={category} value={category}>
+                {category}
+              </option>
+            ))}
+          </select>
+
+          <select value={supplierFilter} onChange={(event) => setSupplierFilter(event.target.value)}>
+            {supplierFilterOptions.map((supplier) => (
+              <option key={supplier} value={supplier}>
+                {supplier}
+              </option>
             ))}
           </select>
 
           <select value={stockFilter} onChange={(event) => setStockFilter(event.target.value)}>
             {stockStatusOptions.map((status) => (
-              <option key={status} value={status}>{status}</option>
+              <option key={status} value={status}>
+                {status}
+              </option>
             ))}
+            <option value="Active">Active</option>
+            <option value="Inactive">Inactive</option>
           </select>
 
           <Button variant="secondary" type="button" onClick={() => setIsAdvancedFiltersOpen(true)}>
@@ -217,6 +414,7 @@ function ProductsPage() {
                 <th>SKU / Item Code</th>
                 <th>Barcode</th>
                 <th>Category</th>
+                <th>Supplier</th>
                 <th>Selling Price</th>
                 <th>Tax</th>
                 <th>Stock</th>
@@ -225,45 +423,110 @@ function ProductsPage() {
               </tr>
             </thead>
             <tbody>
-              {filteredProducts.map((product) => (
-                <tr key={product.id}>
-                  <td>
-                    <div className="product-cell">
-                      <div className="product-cell__dot" aria-hidden="true" />
-                      <span>{product.name}</span>
-                    </div>
-                  </td>
-                  <td>{product.sku}</td>
-                  <td>{product.barcode}</td>
-                  <td>{product.category}</td>
-                  <td>{formatCurrency(product.sellingPrice)}</td>
-                  <td>{product.taxRate}%</td>
-                  <td>{product.stock}</td>
-                  <td>
-                    <Badge tone={getBadgeTone(product.status)}>{product.status}</Badge>
-                  </td>
-                  <td>
-                    <div className="product-row-actions">
-                      <button type="button" onClick={() => setViewingProduct(product)}>View</button>
-                      <button type="button" onClick={() => openEditModal(product)}>Edit</button>
-                      <button type="button" className="danger" onClick={() => setDeleteTargetId(product.id)}>Delete</button>
-                    </div>
+              {isLoading ? (
+                <tr>
+                  <td colSpan="10" style={{ textAlign: 'center', padding: '2rem' }}>
+                    Loading products...
                   </td>
                 </tr>
-              ))}
+              ) : filteredProducts.length === 0 ? (
+                <tr>
+                  <td colSpan="10" style={{ textAlign: 'center', padding: '2rem' }}>
+                    No products found matching the criteria.
+                  </td>
+                </tr>
+              ) : (
+                filteredProducts.map((product) => {
+                  const isItemActive = product.status !== 'Inactive' && product.isActive !== false
+                  return (
+                    <tr key={product.id}>
+                      <td>
+                        <div className="product-cell">
+                          <div className="product-cell__dot" aria-hidden="true" />
+                          <div>
+                            <span>{product.name}</span>
+                            {product.unitOfMeasure && (
+                              <small style={{ display: 'block', color: 'var(--text-secondary, #94a3b8)', fontSize: '0.75rem' }}>
+                                Unit: {product.unitOfMeasure}
+                              </small>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+                      <td>{product.sku}</td>
+                      <td>{product.barcode || '—'}</td>
+                      <td>{product.category || '—'}</td>
+                      <td>{product.supplier || '—'}</td>
+                      <td>{formatCurrency(product.sellingPrice)}</td>
+                      <td>{product.taxRate}%</td>
+                      <td>{product.stock}</td>
+                      <td>
+                        <Badge tone={getBadgeTone(product)}>{getDisplayStatus(product)}</Badge>
+                      </td>
+                      <td>
+                        <div className="product-row-actions">
+                          <button type="button" onClick={() => handleViewDetails(product)}>
+                            View
+                          </button>
+                          {canUpdateProduct && (
+                            <>
+                              <button type="button" onClick={() => openEditModal(product)}>
+                                Edit
+                              </button>
+                              <button
+                                type="button"
+                                className={isItemActive ? 'danger' : ''}
+                                onClick={() => setStatusTargetProduct(product)}
+                              >
+                                {isItemActive ? 'Deactivate' : 'Activate'}
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })
+              )}
             </tbody>
           </table>
         </div>
       </Card>
 
-      {deleteTargetId && (
-        <div className="modal-backdrop" onClick={() => setDeleteTargetId(null)}>
+      {/* Confirmation modal for Activate / Deactivate */}
+      {statusTargetProduct && (
+        <div className="modal-backdrop" onClick={() => setStatusTargetProduct(null)}>
           <div className="confirmation-modal" onClick={(event) => event.stopPropagation()}>
-            <h3>Delete Product</h3>
-            <p>Are you sure you want to delete this product from the catalog?</p>
+            <h3>
+              {statusTargetProduct.status !== 'Inactive' && statusTargetProduct.isActive !== false
+                ? 'Deactivate Product'
+                : 'Activate Product'}
+            </h3>
+            <p>
+              Are you sure you want to{' '}
+              {statusTargetProduct.status !== 'Inactive' && statusTargetProduct.isActive !== false
+                ? 'deactivate'
+                : 'activate'}{' '}
+              <strong>"{statusTargetProduct.name}"</strong>?
+              {statusTargetProduct.status !== 'Inactive' && statusTargetProduct.isActive !== false
+                ? ' Deactivated products will not be available for new sales in the POS register.'
+                : ' Activated products will become available for sales.'}
+            </p>
             <div className="confirmation-modal__actions">
-              <Button variant="secondary" type="button" onClick={() => setDeleteTargetId(null)}>Cancel</Button>
-              <Button variant="primary" type="button" onClick={removeProduct}>Confirm Delete</Button>
+              <Button variant="secondary" type="button" onClick={() => setStatusTargetProduct(null)}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                type="button"
+                className={statusTargetProduct.status !== 'Inactive' && statusTargetProduct.isActive !== false ? 'danger' : ''}
+                onClick={handleToggleStatus}
+              >
+                Confirm{' '}
+                {statusTargetProduct.status !== 'Inactive' && statusTargetProduct.isActive !== false
+                  ? 'Deactivation'
+                  : 'Activation'}
+              </Button>
             </div>
           </div>
         </div>
@@ -271,17 +534,14 @@ function ProductsPage() {
 
       <ProductFormModal
         isOpen={isFormOpen}
-        onClose={closeAddModal}
-        onSubmit={(productData) => {
-          if (editingProduct) {
-            updateProduct(editingProduct.id, productData)
-          } else {
-            addProduct(productData)
-          }
-          closeAddModal()
-        }}
+        onClose={closeFormModal}
+        onSubmit={handleFormSubmit}
         mode={editingProduct ? 'edit' : 'add'}
         product={editingProduct}
+        categoriesList={availableCategories}
+        suppliersList={availableSuppliers}
+        isSubmitting={isSubmitting}
+        externalError={formExternalError}
       />
 
       <ProductDetailsModal product={viewingProduct} onClose={() => setViewingProduct(null)} />

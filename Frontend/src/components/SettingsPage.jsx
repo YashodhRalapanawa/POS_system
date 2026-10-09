@@ -1,9 +1,13 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useRef } from 'react'
 import Button from './ui/Button'
 import Card from './ui/Card'
 import RestoreDefaultsModal from './RestoreDefaultsModal'
+import CurrencySafeguardModal from './CurrencySafeguardModal'
 import { defaultSettings } from '../data/mockSettings'
 import { applyTheme, defaultThemeName, getSavedThemeName, persistTheme, themeOptions as themeSelectOptions } from '../data/themeConfig'
+import { useCurrency } from '../context/CurrencyContext'
+import { COUNTRIES, resolveCurrencyForCountry, getCountryByCode } from '../data/countryCurrencies'
+import { updateCountryCurrencySettings } from '../services/api'
 
 const currencyOptions = ['USD', 'LKR', 'EUR', 'GBP', 'AUD']
 const registerOptions = ['Register #01', 'Register #02', 'Register #03', 'Register #04']
@@ -24,6 +28,8 @@ const themePreviewPalette = {
 }
 
 function SettingsPage() {
+  const { currencyConfig, updateLocalCurrencyConfig, refreshCurrencySettings } = useCurrency()
+
   const [savedSettings, setSavedSettings] = useState(() => ({
     ...defaultSettings,
     theme: getSavedThemeName(),
@@ -36,6 +42,56 @@ function SettingsPage() {
   const [statusMessage, setStatusMessage] = useState(null)
   const [isRestoreModalOpen, setIsRestoreModalOpen] = useState(false)
 
+  // Country & Currency state
+  const [activeCountryCurrency, setActiveCountryCurrency] = useState(() => ({
+    countryCode: currencyConfig?.countryCode || 'LK',
+    countryName: currencyConfig?.countryName || 'Sri Lanka',
+    currencyCode: currencyConfig?.currencyCode || 'LKR',
+    currencyName: currencyConfig?.currencyName || 'Sri Lankan Rupee',
+    currencySymbol: currencyConfig?.currencySymbol || 'Rs.',
+  }))
+  const [draftCountryCurrency, setDraftCountryCurrency] = useState(() => ({
+    countryCode: currencyConfig?.countryCode || 'LK',
+    countryName: currencyConfig?.countryName || 'Sri Lanka',
+    currencyCode: currencyConfig?.currencyCode || 'LKR',
+    currencyName: currencyConfig?.currencyName || 'Sri Lankan Rupee',
+    currencySymbol: currencyConfig?.currencySymbol || 'Rs.',
+  }))
+
+  const [countrySearch, setCountrySearch] = useState(currencyConfig?.countryName || 'Sri Lanka')
+  const [isCountryDropdownOpen, setIsCountryDropdownOpen] = useState(false)
+  const [isSavingCurrency, setIsSavingCurrency] = useState(false)
+  const [isCurrencySafeguardOpen, setIsCurrencySafeguardOpen] = useState(false)
+  const [currencyStatusMessage, setCurrencyStatusMessage] = useState(null)
+  const dropdownRef = useRef(null)
+
+  // Sync when global currencyConfig finishes loading from API
+  useEffect(() => {
+    if (currencyConfig?.countryCode) {
+      const cfg = {
+        countryCode: currencyConfig.countryCode,
+        countryName: currencyConfig.countryName,
+        currencyCode: currencyConfig.currencyCode,
+        currencyName: currencyConfig.currencyName,
+        currencySymbol: currencyConfig.currencySymbol,
+      }
+      setActiveCountryCurrency(cfg)
+      setDraftCountryCurrency(cfg)
+      setCountrySearch(currencyConfig.countryName || 'Sri Lanka')
+    }
+  }, [currencyConfig])
+
+  // Close country dropdown when clicked outside
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setIsCountryDropdownOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
   useEffect(() => {
     applyTheme(draftSettings.theme)
   }, [draftSettings.theme])
@@ -44,6 +100,96 @@ function SettingsPage() {
     () => JSON.stringify(draftSettings) !== JSON.stringify(savedSettings),
     [draftSettings, savedSettings],
   )
+
+  const hasCurrencyChanges = useMemo(
+    () =>
+      draftCountryCurrency.countryCode !== activeCountryCurrency.countryCode ||
+      draftCountryCurrency.currencyCode !== activeCountryCurrency.currencyCode,
+    [draftCountryCurrency, activeCountryCurrency],
+  )
+
+  const filteredCountries = useMemo(() => {
+    const q = (countrySearch || '').trim().toLowerCase()
+    if (!q) return COUNTRIES
+    return COUNTRIES.filter(
+      (c) =>
+        (c?.countryName || '').toLowerCase().includes(q) ||
+        (c?.countryCode || '').toLowerCase().includes(q) ||
+        (c?.currencyCode || '').toLowerCase().includes(q),
+    )
+  }, [countrySearch])
+
+  const handleSelectCountry = (country) => {
+    const resolved = resolveCurrencyForCountry(country.countryCode)
+    const nextState = {
+      countryCode: resolved.countryCode,
+      countryName: resolved.countryName,
+      currencyCode: resolved.currencyCode,
+      currencyName: resolved.currencyName,
+      currencySymbol: resolved.currencySymbol,
+    }
+    setDraftCountryCurrency(nextState)
+    setCountrySearch(resolved.countryName)
+    setIsCountryDropdownOpen(false)
+    setCurrencyStatusMessage(null)
+
+    setDraftSettings((prev) => ({
+      ...prev,
+      country: resolved.countryName,
+      currency: resolved.currencyCode,
+    }))
+  }
+
+  const handleInitiateSaveCurrency = () => {
+    if (draftCountryCurrency.currencyCode !== activeCountryCurrency.currencyCode) {
+      setIsCurrencySafeguardOpen(true)
+      return
+    }
+    executeSaveCurrency()
+  }
+
+  const executeSaveCurrency = async () => {
+    try {
+      setIsSavingCurrency(true)
+      setCurrencyStatusMessage(null)
+
+      const res = await updateCountryCurrencySettings({
+        countryCode: draftCountryCurrency.countryCode,
+        currencyCode: draftCountryCurrency.currencyCode,
+      })
+
+      if (res && res.success) {
+        const data = res.data || res
+        const savedMeta = {
+          countryCode: data.countryCode || draftCountryCurrency.countryCode,
+          countryName: data.countryName || draftCountryCurrency.countryName,
+          currencyCode: data.currencyCode || draftCountryCurrency.currencyCode,
+          currencyName: data.currencyName || draftCountryCurrency.currencyName,
+          currencySymbol: data.currencySymbol || draftCountryCurrency.currencySymbol,
+        }
+        setActiveCountryCurrency(savedMeta)
+        setDraftCountryCurrency(savedMeta)
+        updateLocalCurrencyConfig(savedMeta)
+        setCurrencyStatusMessage({
+          type: 'success',
+          text: `Country & Currency updated to ${savedMeta.countryName} (${savedMeta.currencyCode} - ${savedMeta.currencySymbol}). All POS screens updated.`,
+        })
+        setIsCurrencySafeguardOpen(false)
+      } else {
+        setCurrencyStatusMessage({
+          type: 'error',
+          text: res?.message || 'Failed to update country and currency settings.',
+        })
+      }
+    } catch (err) {
+      setCurrencyStatusMessage({
+        type: 'error',
+        text: 'Failed to communicate with settings server.',
+      })
+    } finally {
+      setIsSavingCurrency(false)
+    }
+  }
 
   const updateDraftField = (field, value) => {
     setDraftSettings((currentSettings) => ({
@@ -106,7 +252,7 @@ function SettingsPage() {
     return nextErrors
   }
 
-  const handleSaveChanges = () => {
+  const handleSaveChanges = async () => {
     const nextErrors = validateSettings(draftSettings)
     if (Object.keys(nextErrors).length > 0) {
       setValidationErrors(nextErrors)
@@ -115,6 +261,15 @@ function SettingsPage() {
         text: 'Please correct the highlighted settings before saving.',
       })
       return
+    }
+
+    // If Country & Currency was also modified, save that to backend as well
+    if (hasCurrencyChanges) {
+      if (draftCountryCurrency.currencyCode !== activeCountryCurrency.currencyCode) {
+        setIsCurrencySafeguardOpen(true)
+        return
+      }
+      await executeSaveCurrency()
     }
 
     setSavedSettings(draftSettings)
@@ -128,11 +283,14 @@ function SettingsPage() {
 
   const handleResetChanges = () => {
     setDraftSettings(savedSettings)
+    setDraftCountryCurrency(activeCountryCurrency)
+    setCountrySearch(activeCountryCurrency.countryName)
     setValidationErrors({})
     setStatusMessage({
       type: 'info',
       text: 'Changes discarded.',
     })
+    setCurrencyStatusMessage(null)
   }
 
   const handleRestoreDefaults = () => {
@@ -160,7 +318,9 @@ function SettingsPage() {
         </div>
 
         <div className="products-page__actions settings-page__actions">
-          {hasUnsavedChanges && <span className="settings-unsaved-indicator">Unsaved changes</span>}
+          {(hasUnsavedChanges || hasCurrencyChanges) && (
+            <span className="settings-unsaved-indicator">Unsaved changes</span>
+          )}
           <Button variant="secondary" type="button" onClick={handleResetChanges}>Reset Changes</Button>
           <Button variant="primary" type="button" onClick={handleSaveChanges}>Save Changes</Button>
         </div>
@@ -173,6 +333,124 @@ function SettingsPage() {
       )}
 
       <div className="settings-grid">
+        {/* Step 2: Country & Currency Settings Section */}
+        <Card
+          title="Country & Currency"
+          subtitle="Configure store country and official ISO currency for pricing, cart, and orders"
+          className="settings-card"
+        >
+          {currencyStatusMessage && (
+            <div className={`settings-status settings-status--${currencyStatusMessage.type}`} style={{ marginBottom: '1rem' }}>
+              {currencyStatusMessage.text}
+            </div>
+          )}
+
+          <div className="settings-field-grid">
+            <div className="settings-field settings-field--full country-select-container" ref={dropdownRef}>
+              <span>Country (Searchable)</span>
+              <div className="country-select-input-wrapper">
+                <input
+                  type="text"
+                  className="country-select-input"
+                  placeholder="Type to search country name or code..."
+                  value={countrySearch}
+                  onChange={(event) => {
+                    setCountrySearch(event.target.value)
+                    setIsCountryDropdownOpen(true)
+                  }}
+                  onFocus={() => setIsCountryDropdownOpen(true)}
+                />
+                <button
+                  type="button"
+                  onClick={() => setIsCountryDropdownOpen((prev) => !prev)}
+                  style={{
+                    position: 'absolute',
+                    right: '12px',
+                    background: 'none',
+                    border: 'none',
+                    cursor: 'pointer',
+                    fontSize: '0.8rem',
+                    color: '#64748b',
+                  }}
+                  aria-label="Toggle country list"
+                >
+                  {isCountryDropdownOpen ? '▲' : '▼'}
+                </button>
+              </div>
+
+              {isCountryDropdownOpen && (
+                <ul className="country-select-dropdown">
+                  {filteredCountries.length === 0 ? (
+                    <li style={{ padding: '8px 12px', color: '#94a3b8', fontSize: '0.85rem' }}>
+                      No countries match &quot;{countrySearch}&quot;
+                    </li>
+                  ) : (
+                    filteredCountries.map((c) => (
+                      <li
+                        key={c.countryCode}
+                        className={`country-select-item ${draftCountryCurrency.countryCode === c.countryCode ? 'selected' : ''}`}
+                        onClick={() => handleSelectCountry(c)}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <span className="country-select-badge">{c.countryCode}</span>
+                          <strong>{c.countryName}</strong>
+                        </div>
+                        <span className="currency-preview-badge">
+                          {c.currencyCode} · {c.currencySymbol}
+                        </span>
+                      </li>
+                    ))
+                  )}
+                </ul>
+              )}
+            </div>
+
+            <label className="settings-field">
+              <span>Currency</span>
+              <input
+                type="text"
+                readOnly
+                value={draftCountryCurrency.currencyName}
+                style={{ background: '#f8fafc', color: '#1e293b', cursor: 'default' }}
+              />
+            </label>
+
+            <label className="settings-field">
+              <span>Currency Code</span>
+              <input
+                type="text"
+                readOnly
+                value={draftCountryCurrency.currencyCode}
+                style={{ background: '#f8fafc', fontWeight: 600, color: '#0f172a', cursor: 'default' }}
+              />
+            </label>
+
+            <label className="settings-field">
+              <span>Currency Symbol</span>
+              <input
+                type="text"
+                readOnly
+                value={draftCountryCurrency.currencySymbol}
+                style={{ background: '#f8fafc', fontWeight: 700, color: '#16a34a', cursor: 'default' }}
+              />
+            </label>
+          </div>
+
+          <div style={{ marginTop: '1.25rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
+            <small style={{ color: 'var(--text-secondary, #64748b)' }}>
+              Country selection automatically determines ISO 4217 currency name, code, and symbol.
+            </small>
+            <Button
+              variant="primary"
+              type="button"
+              onClick={handleInitiateSaveCurrency}
+              disabled={isSavingCurrency || !hasCurrencyChanges}
+            >
+              {isSavingCurrency ? 'Saving...' : 'Save Country & Currency'}
+            </Button>
+          </div>
+        </Card>
+
         <Card title="Store Profile" subtitle="Basic information used across the POS, invoices, and receipts" className="settings-card">
           <div className="settings-field-grid">
             <label className="settings-field">
@@ -209,17 +487,20 @@ function SettingsPage() {
 
             <label className="settings-field">
               <span>Country</span>
-              <input value={draftSettings.country} onChange={(event) => updateDraftField('country', event.target.value)} />
+              <input
+                value={draftCountryCurrency.countryName}
+                readOnly
+                style={{ background: '#f8fafc', color: '#1e293b', cursor: 'default' }}
+              />
             </label>
 
             <label className="settings-field">
               <span>Currency</span>
-              <select value={draftSettings.currency} onChange={(event) => updateDraftField('currency', event.target.value)}>
-                {currencyOptions.map((option) => (
-                  <option key={option} value={option}>{option}</option>
-                ))}
-              </select>
-              {validationErrors.currency && <small className="field-error-inline">{validationErrors.currency}</small>}
+              <input
+                value={`${draftCountryCurrency.currencyCode} (${draftCountryCurrency.currencySymbol})`}
+                readOnly
+                style={{ background: '#f8fafc', color: '#1e293b', cursor: 'default' }}
+              />
             </label>
           </div>
         </Card>
@@ -454,6 +735,15 @@ function SettingsPage() {
         isOpen={isRestoreModalOpen}
         onClose={() => setIsRestoreModalOpen(false)}
         onConfirm={handleRestoreDefaults}
+      />
+
+      <CurrencySafeguardModal
+        isOpen={isCurrencySafeguardOpen}
+        onClose={() => setIsCurrencySafeguardOpen(false)}
+        onConfirm={executeSaveCurrency}
+        currentCurrency={activeCountryCurrency}
+        newCurrency={draftCountryCurrency}
+        isLoading={isSavingCurrency}
       />
     </div>
   )

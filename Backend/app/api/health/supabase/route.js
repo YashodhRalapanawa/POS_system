@@ -1,4 +1,4 @@
-import { getSupabaseEnv } from "../../../../lib/supabase/server";
+import { getSupabaseEnv } from "../../../../lib/supabase/server.js";
 
 export const dynamic = "force-dynamic";
 

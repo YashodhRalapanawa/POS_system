@@ -7,6 +7,7 @@ import SignUpPage from './components/auth/SignUpPage'
 import ForgotPasswordPage from './components/auth/ForgotPasswordPage'
 import ProtectedRoute, { PublicOnlyRoute } from './components/auth/ProtectedRoute'
 import { AuthProvider } from './context/AuthContext'
+import { CurrencyProvider } from './context/CurrencyContext'
 import { paths } from './routes'
 import { applyTheme, getSavedThemeName } from './data/themeConfig'
 
@@ -23,27 +24,29 @@ function App() {
 
   return (
     <AuthProvider>
-      <BrowserRouter>
-        <Routes>
-          {/* Public auth pages render outside the shell (no Sidebar/Topbar). */}
-          {publicRoutes.map((route) => (
+      <CurrencyProvider>
+        <BrowserRouter>
+          <Routes>
+            {/* Public auth pages render outside the shell (no Sidebar/Topbar). */}
+            {publicRoutes.map((route) => (
+              <Route
+                key={route.path}
+                path={route.path}
+                element={<PublicOnlyRoute>{route.element}</PublicOnlyRoute>}
+              />
+            ))}
+            {/* Every existing app route lives inside AppShell and requires a session. */}
             <Route
-              key={route.path}
-              path={route.path}
-              element={<PublicOnlyRoute>{route.element}</PublicOnlyRoute>}
+              path="*"
+              element={
+                <ProtectedRoute>
+                  <AppShell />
+                </ProtectedRoute>
+              }
             />
-          ))}
-          {/* Every existing app route lives inside AppShell and requires a session. */}
-          <Route
-            path="*"
-            element={
-              <ProtectedRoute>
-                <AppShell />
-              </ProtectedRoute>
-            }
-          />
-        </Routes>
-      </BrowserRouter>
+          </Routes>
+        </BrowserRouter>
+      </CurrencyProvider>
     </AuthProvider>
   )
 }
