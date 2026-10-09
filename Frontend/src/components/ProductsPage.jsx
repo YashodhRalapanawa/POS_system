@@ -18,16 +18,11 @@ import {
 } from '../services/api'
 import { useAuth } from '../context/AuthContext'
 import { PERMISSIONS, hasPermission } from '../auth/permissions'
-
-function formatCurrency(value) {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-  }).format(value)
-}
+import { useCurrency } from '../context/CurrencyContext'
 
 function ProductsPage() {
   const { user } = useAuth()
+  const { formatCurrency } = useCurrency()
   const [products, setProducts] = useState([])
   const [isLoading, setIsLoading] = useState(true)
   const [apiError, setApiError] = useState(null)

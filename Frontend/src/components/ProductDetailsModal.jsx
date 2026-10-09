@@ -1,14 +1,9 @@
 import Button from './ui/Button'
 import Badge from './ui/Badge'
-
-function formatCurrency(value) {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-  }).format(value)
-}
+import { useCurrency } from '../context/CurrencyContext'
 
 function ProductDetailsModal({ product, onClose }) {
+  const { formatCurrency } = useCurrency()
   if (!product) return null
 
   return (

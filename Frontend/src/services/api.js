@@ -350,4 +350,100 @@ export async function getInventoryMovements(params = {}) {
   return apiFetch(`/api/inventory/movements${queryString}`, { method: 'GET' })
 }
 
+/**
+ * POS Orders APIs
+ */
+
+export async function getPosOrders(params = {}) {
+  const query = new URLSearchParams()
+  if (params.search) query.set('search', params.search)
+  if (params.status && params.status !== 'All Status' && params.status !== 'All') query.set('status', params.status)
+  if (params.storeId && params.storeId !== 'All Stores' && params.storeId !== 'All') query.set('storeId', params.storeId)
+  if (params.dateFilter && params.dateFilter !== 'All Dates') query.set('date', params.dateFilter)
+  if (params.startDate) query.set('startDate', params.startDate)
+  if (params.endDate) query.set('endDate', params.endDate)
+  if (params.page) query.set('page', String(params.page))
+  if (params.limit) query.set('limit', String(params.limit))
+
+  const queryString = query.toString() ? `?${query.toString()}` : ''
+  return apiFetch(`/api/pos/orders${queryString}`, { method: 'GET' })
+}
+
+export async function getPosOrderById(orderId) {
+  return apiFetch(`/api/pos/orders/${orderId}`, { method: 'GET' })
+}
+
+export async function createPosOrder(orderData, idempotencyKey = null) {
+  const headers = {}
+  if (idempotencyKey) {
+    headers['Idempotency-Key'] = idempotencyKey
+  }
+
+  return apiFetch('/api/pos/orders', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(orderData),
+  })
+}
+
+export async function updatePosOrder(orderId, orderData) {
+  return apiFetch(`/api/pos/orders/${orderId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(orderData),
+  })
+}
+
+export async function cancelPosOrder(orderId, reasonData = {}) {
+  return apiFetch(`/api/pos/orders/${orderId}/cancel`, {
+    method: 'POST',
+    body: JSON.stringify(reasonData),
+  })
+}
+
+export async function completePosOrder(orderId) {
+  return apiFetch(`/api/pos/orders/${orderId}/complete`, {
+    method: 'POST',
+  })
+}
+
+/**
+ * Task 19: Stock Availability and Stock Validation APIs
+ */
+
+export async function getStockAvailability({ storeId, productIds }) {
+  const query = new URLSearchParams()
+  if (storeId) query.set('storeId', storeId)
+  if (Array.isArray(productIds)) {
+    query.set('productIds', productIds.join(','))
+  } else if (productIds) {
+    query.set('productIds', String(productIds))
+  }
+
+  return apiFetch(`/api/inventory/availability?${query.toString()}`, { method: 'GET' })
+}
+
+export async function validatePosOrderStock(data) {
+  return apiFetch('/api/pos/orders/validate-stock', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+/**
+ * Settings: Country & Currency APIs
+ */
+export async function getCountryCurrencySettings(storeId = null) {
+  const query = storeId ? `?storeId=${encodeURIComponent(storeId)}` : ''
+  return apiFetch(`/api/settings/country-currency${query}`, { method: 'GET' })
+}
+
+export async function updateCountryCurrencySettings(data) {
+  return apiFetch('/api/settings/country-currency', {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  })
+}
+
+
+
 

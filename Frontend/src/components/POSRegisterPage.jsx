@@ -1,54 +1,60 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import Button from './ui/Button'
 import Card from './ui/Card'
 import Badge from './ui/Badge'
 import { mockCustomers, mockProducts, paymentMethods, keyShortcuts, productCategories } from '../data/mockPOS'
-import { getProducts, getProductByBarcode, getCustomers, createCustomer } from '../services/api'
+import { getProducts, getProductByBarcode, getCustomers, createCustomer, createPosOrder, updatePosOrder, getPosOrderById, getStockAvailability, validatePosOrderStock, completePosOrder } from '../services/api'
 import CustomerFormModal from './CustomerFormModal'
 import { PERMISSIONS, usePermission } from '../auth/permissions'
+import { useAuth } from '../context/AuthContext'
+import { useCurrency } from '../context/CurrencyContext'
+import { paths } from '../paths'
 
-const initialCart = [
-  {
-    id: 'prod-sony-wh1000',
-    name: 'Sony WH-1000XM5',
-    sku: 'SONY-WH-1000XM5',
-    price: 349.99,
-    quantity: 1,
-    taxRate: 0.15,
-    discount: 0,
-  },
-  {
-    id: 'prod-thermal-paper',
-    name: 'Thermal Paper Roll',
-    sku: 'POS-THERMAL-01',
-    price: 8.5,
-    quantity: 2,
-    taxRate: 0.15,
-    discount: 0,
-  },
-]
-
-function formatCurrency(value) {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-  }).format(value)
-}
+const initialCart = []
 
 function POSRegisterPage() {
+  const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const orderIdParam = searchParams.get('orderId')
+  const { user } = useAuth()
+  const { formatCurrency } = useCurrency()
+
   const canCreateCustomer = usePermission(PERMISSIONS.CUSTOMERS_CREATE) || usePermission(PERMISSIONS.CUSTOMERS_MANAGE)
+  const canCreateDraft = usePermission(PERMISSIONS.POS_ORDERS_CREATE) || usePermission(PERMISSIONS.POS_USE)
+  const canUpdateDraft = usePermission(PERMISSIONS.POS_ORDERS_UPDATE)
+  const canCompleteOrder = usePermission(PERMISSIONS.POS_ORDERS_COMPLETE) || usePermission(PERMISSIONS.POS_USE) || usePermission(PERMISSIONS.ORDERS_VIEW)
 
   const [products, setProducts] = useState(mockProducts)
   const [customers, setCustomers] = useState(mockCustomers)
   const [selectedCustomerId, setSelectedCustomerId] = useState(mockCustomers[0]?.id || '')
   const [search, setSearch] = useState('')
   const [selectedCategory, setSelectedCategory] = useState('All')
+  const [cart, setCart] = useState(initialCart)
 
   const [showCustomerModal, setShowCustomerModal] = useState(false)
   const [customerFilterText, setCustomerFilterText] = useState('')
   const [showAddCustomerModal, setShowAddCustomerModal] = useState(false)
   const [isCreatingCustomer, setIsCreatingCustomer] = useState(false)
   const [addCustomerError, setAddCustomerError] = useState('')
+
+  const [editingOrderId, setEditingOrderId] = useState(null)
+  const [editingOrderNumber, setEditingOrderNumber] = useState(null)
+  const [isSavingDraft, setIsSavingDraft] = useState(false)
+  const [posNotification, setPosNotification] = useState(null)
+  const [stockAvailability, setStockAvailability] = useState({})
+  const [itemValidationErrors, setItemValidationErrors] = useState({})
+  const [stockWarningBanner, setStockWarningBanner] = useState(null)
+  const [showCompleteConfirmModal, setShowCompleteConfirmModal] = useState(false)
+  const [isCompletingOrder, setIsCompletingOrder] = useState(false)
+  const [completionError, setCompletionError] = useState(null)
+
+  const showPosNotification = (message, tone = 'success') => {
+    setPosNotification({ message, tone })
+    setTimeout(() => {
+      setPosNotification((curr) => (curr?.message === message ? null : curr))
+    }, 4500)
+  }
 
   useEffect(() => {
     let isMounted = true
@@ -108,6 +114,35 @@ function POSRegisterPage() {
     }
   }, [])
 
+  const fetchStockAvailability = async (productIds) => {
+    if (!productIds || productIds.length === 0) return
+    try {
+      const res = await getStockAvailability({
+        storeId: user?.storeId,
+        productIds,
+      })
+      if (res?.ok && res.data?.success) {
+        const list = res.data.data?.availability || res.data.availability || []
+        setStockAvailability((prev) => {
+          const updated = { ...prev }
+          list.forEach((item) => {
+            updated[item.productId] = item
+          })
+          return updated
+        })
+      }
+    } catch {}
+  }
+
+  const cartProductIdsKey = useMemo(() => cart.map((i) => i.id).sort().join(','), [cart])
+
+  useEffect(() => {
+    if (cart.length > 0) {
+      const ids = cart.map((i) => i.id)
+      fetchStockAvailability(ids)
+    }
+  }, [cartProductIdsKey, user?.storeId])
+
   const fetchActiveCustomers = async (autoSelectId = null) => {
     try {
       const res = await getCustomers({ status: 'Active', all: true })
@@ -151,7 +186,6 @@ function POSRegisterPage() {
     }
   }
 
-  const [cart, setCart] = useState(initialCart)
   const [discountType, setDiscountType] = useState('percent')
   const [discountValue, setDiscountValue] = useState(10)
   const [paymentMethod, setPaymentMethod] = useState('Cash')
@@ -164,6 +198,35 @@ function POSRegisterPage() {
   const [scanError, setScanError] = useState('')
   const [scanNotification, setScanNotification] = useState(null)
   const scanInputRef = useRef(null)
+  const searchInputRef = useRef(null)
+  const scannerBufferRef = useRef('')
+  const lastKeyTimeRef = useRef(0)
+
+  const playScanBeep = () => {
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext
+      if (!AudioCtx) return
+      const audioCtx = new AudioCtx()
+      const osc = audioCtx.createOscillator()
+      const gain = audioCtx.createGain()
+      osc.type = 'sine'
+      osc.frequency.setValueAtTime(1760, audioCtx.currentTime)
+      gain.gain.setValueAtTime(0.08, audioCtx.currentTime)
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.1)
+      osc.connect(gain)
+      gain.connect(audioCtx.destination)
+      osc.start()
+      osc.stop(audioCtx.currentTime + 0.1)
+    } catch {}
+  }
+
+  // Autofocus product search on mount so handheld scanners work immediately
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      searchInputRef.current?.focus()
+    }, 150)
+    return () => clearTimeout(timer)
+  }, [])
 
   useEffect(() => {
     if (showScanModal) {
@@ -172,6 +235,49 @@ function POSRegisterPage() {
       }, 50)
     }
   }, [showScanModal])
+
+  // Global hardware barcode scanner (HID wedge) & F4 shortcut listener
+  useEffect(() => {
+    const handleGlobalKeyDown = (e) => {
+      if (e.key === 'F4') {
+        e.preventDefault()
+        searchInputRef.current?.focus()
+        searchInputRef.current?.select()
+        return
+      }
+
+      const activeTag = document.activeElement?.tagName
+      const isInput = activeTag === 'INPUT' || activeTag === 'TEXTAREA'
+      const isSearchInput = document.activeElement === searchInputRef.current
+
+      const now = Date.now()
+      const timeDiff = now - lastKeyTimeRef.current
+      lastKeyTimeRef.current = now
+
+      // Hardware scanners typically stream characters < 60ms apart
+      if (timeDiff > 75 && scannerBufferRef.current.length > 0) {
+        scannerBufferRef.current = ''
+      }
+
+      if (e.key === 'Enter') {
+        const buffered = scannerBufferRef.current.trim()
+        if (buffered.length >= 3) {
+          e.preventDefault()
+          scannerBufferRef.current = ''
+          handleBarcodeScan(buffered, false)
+          return
+        }
+        scannerBufferRef.current = ''
+      } else if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        if (!isInput || isSearchInput) {
+          scannerBufferRef.current += e.key
+        }
+      }
+    }
+
+    window.addEventListener('keydown', handleGlobalKeyDown)
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown)
+  }, [products])
 
   const visibleProducts = useMemo(() => {
     const value = search.trim().toLowerCase()
@@ -222,6 +328,7 @@ function POSRegisterPage() {
   const total = subtotal - discountAmount + taxAmount
   const dueAmount = Math.max(total, 0)
   const tenderedValue = Number(cashTendered || 0)
+  const changeDue = Math.max(tenderedValue - dueAmount, 0)
   const customer = customers.find((entry) => entry.id === selectedCustomerId) || customers[0] || {
     id: 'walk-in',
     name: 'Walk-in Customer',
@@ -300,12 +407,30 @@ function POSRegisterPage() {
   }, [showScanModal])
 
   const addToCart = (product) => {
+    setItemValidationErrors((prev) => {
+      if (!prev[product.id]) return prev
+      const copy = { ...prev }
+      delete copy[product.id]
+      return copy
+    })
+
     setCart((currentCart) => {
       const existingItem = currentCart.find((item) => item.id === product.id)
+      const currentQty = existingItem ? existingItem.quantity : 0
+      const nextQty = currentQty + 1
+      const availInfo = stockAvailability[product.id]
+      const availableStock = availInfo ? availInfo.availableQuantity : (product.stock ?? Infinity)
+
+      if (availableStock !== Infinity && nextQty > availableStock) {
+        showPosNotification(
+          `Notice: Requested quantity (${nextQty}) exceeds available stock (${availableStock}) for "${product.name}".`,
+          'warning'
+        )
+      }
 
       if (existingItem) {
         return currentCart.map((item) =>
-          item.id === product.id ? { ...item, quantity: item.quantity + 1 } : item,
+          item.id === product.id ? { ...item, quantity: nextQty } : item,
         )
       }
 
@@ -317,6 +442,7 @@ function POSRegisterPage() {
           sku: product.sku,
           price: product.price,
           quantity: 1,
+          stock: product.stock,
           taxRate: product.taxRate,
           discount: 0,
         },
@@ -325,46 +451,96 @@ function POSRegisterPage() {
   }
 
   const updateQuantity = (productId, step) => {
+    setItemValidationErrors((prev) => {
+      if (!prev[productId]) return prev
+      const copy = { ...prev }
+      delete copy[productId]
+      return copy
+    })
+
     setCart((currentCart) =>
       currentCart
         .map((item) => {
           if (item.id !== productId) return item
-          return { ...item, quantity: Math.max(item.quantity + step, 1) }
+          const nextQty = Math.max(item.quantity + step, 1)
+          const availInfo = stockAvailability[item.id]
+          const availableStock = availInfo ? availInfo.availableQuantity : (item.stock ?? Infinity)
+
+          if (step > 0 && availableStock !== Infinity && nextQty > availableStock) {
+            showPosNotification(
+              `Insufficient stock warning: "${item.name}" has ${availableStock} available, but ${nextQty} requested.`,
+              'warning'
+            )
+          }
+
+          return { ...item, quantity: nextQty }
         })
         .filter((item) => item.quantity > 0),
     )
   }
 
   const removeItem = (productId) => {
+    setItemValidationErrors((prev) => {
+      if (!prev[productId]) return prev
+      const copy = { ...prev }
+      delete copy[productId]
+      return copy
+    })
     setCart((currentCart) => currentCart.filter((item) => item.id !== productId))
   }
 
-  const completeSale = () => {
+  const completeSale = async () => {
     if (cart.length === 0) {
       setCartValidationMessage('Add at least one item before completing the sale.')
       setPaymentValidationMessage('')
       return
     }
 
-    if (paymentMethod === 'Cash') {
-      const hasValidTenderedAmount = Number.isFinite(tenderedValue) && tenderedValue >= 0
-
-      if (!hasValidTenderedAmount) {
-        setPaymentValidationMessage('Amount tendered must be a valid non-negative number.')
-        setCartValidationMessage('')
-        return
-      }
-
-      if (tenderedValue < dueAmount) {
-        setPaymentValidationMessage(`Insufficient payment. Enter at least ${formatCurrency(dueAmount)}.`)
-        setCartValidationMessage('')
-        return
-      }
+    if (editingOrderId) {
+      setShowCompleteConfirmModal(true)
+      return
     }
 
-    setPaymentValidationMessage('')
-    setCartValidationMessage('')
-    setShowConfirmation(true)
+    // If new cart, save as draft first then open completion confirmation modal
+    setIsSavingDraft(true)
+    const payload = {
+      customerId: selectedCustomerId || null,
+      storeId: user?.storeId || null,
+      items: cart.map((item) => ({
+        productId: item.id,
+        quantity: item.quantity,
+      })),
+    }
+
+    try {
+      const valRes = await validatePosOrderStock({ storeId: user?.storeId || null, items: payload.items })
+      const valData = valRes?.data?.data || valRes?.data || {}
+      if (valRes?.ok && valData?.valid === false) {
+        const errorMap = {}
+        ;(valData.items || []).filter((it) => !it.valid).forEach((it) => {
+          errorMap[it.productId] = it.message || 'Insufficient stock'
+        })
+        setItemValidationErrors(errorMap)
+        showPosNotification('Cannot complete order: Insufficient stock for one or more items.', 'danger')
+        setIsSavingDraft(false)
+        return
+      }
+
+      const idempotencyKey = `pos-draft-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+      const res = await createPosOrder(payload, idempotencyKey)
+      if (res?.ok && res.data?.success) {
+        const created = res.data.data?.order || res.data.data
+        setEditingOrderId(created.id)
+        setEditingOrderNumber(created.orderNumber)
+        setShowCompleteConfirmModal(true)
+      } else {
+        showPosNotification(res?.data?.message || 'Failed to save draft order for completion.', 'danger')
+      }
+    } catch (err) {
+      showPosNotification(err.message || 'Error communicating with server.', 'danger')
+    } finally {
+      setIsSavingDraft(false)
+    }
   }
 
   const closeConfirmation = () => setShowConfirmation(false)
@@ -384,6 +560,248 @@ function POSRegisterPage() {
     setScanQuery('')
     setScanError('')
     setScanNotification(null)
+  }
+
+  useEffect(() => {
+    if (!orderIdParam) return
+    let isMounted = true
+
+    getPosOrderById(orderIdParam)
+      .then((res) => {
+        if (!isMounted) return
+        if (res?.ok && res.data?.success) {
+          const ord = res.data.data?.order || res.data.data
+          if (String(ord.status).toLowerCase() !== 'draft') {
+            showPosNotification(`Order ${ord.orderNumber || orderIdParam} is in "${ord.status}" status and cannot be edited.`, 'danger')
+            return
+          }
+
+          setEditingOrderId(ord.id)
+          setEditingOrderNumber(ord.orderNumber)
+          if (ord.customerId) {
+            setSelectedCustomerId(ord.customerId)
+          }
+
+          const loadedCart = (ord.items || []).map((it) => ({
+            id: it.productId,
+            name: it.productName || it.name,
+            sku: it.sku || '',
+            price: Number(it.unitPrice || 0),
+            quantity: Number(it.quantity || 1),
+            taxRate: 0,
+            discount: 0,
+          }))
+
+          setCart(loadedCart)
+          showPosNotification(`Loaded draft order #${ord.orderNumber} for editing.`, 'info')
+        } else {
+          showPosNotification(res?.data?.message || res?.error || 'Failed to load draft order.', 'danger')
+        }
+      })
+      .catch((err) => {
+        if (isMounted) {
+          showPosNotification(err.message || 'Error communicating with server.', 'danger')
+        }
+      })
+
+    return () => {
+      isMounted = false
+    }
+  }, [orderIdParam])
+
+  const handleSaveDraftOrder = async () => {
+    if (cart.length === 0) {
+      setCartValidationMessage('Add at least one item before saving a draft order.')
+      return
+    }
+
+    setCartValidationMessage('')
+    setStockWarningBanner(null)
+    setIsSavingDraft(true)
+
+    const payload = {
+      customerId: selectedCustomerId || null,
+      storeId: user?.storeId || null,
+      items: cart.map((item) => ({
+        productId: item.id,
+        quantity: item.quantity,
+      })),
+    }
+
+    try {
+      // Step 12: Validate Before Saving via POST /api/pos/orders/validate-stock
+      const validationRes = await validatePosOrderStock({
+        storeId: user?.storeId || null,
+        items: payload.items,
+      })
+
+      const valData = validationRes?.data?.data || validationRes?.data || {}
+
+      if (validationRes?.ok && valData?.valid === false) {
+        const errorMap = {}
+        const failedItems = (valData.items || []).filter((it) => !it.valid)
+        failedItems.forEach((it) => {
+          errorMap[it.productId] = it.message || `Insufficient stock (${it.availableQuantity ?? 0} available)`
+        })
+        setItemValidationErrors(errorMap)
+
+        if (Array.isArray(valData.items)) {
+          setStockAvailability((prev) => {
+            const copy = { ...prev }
+            valData.items.forEach((it) => {
+              copy[it.productId] = {
+                availableQuantity: it.availableQuantity,
+                currentStock: it.currentStock,
+                reservedStock: it.reservedStock,
+              }
+            })
+            return copy
+          })
+        }
+
+        const firstMsg = failedItems[0]?.message || 'Insufficient stock for one or more items.'
+        setStockWarningBanner(`Cannot save draft order: ${firstMsg}`)
+        showPosNotification(`Cannot save draft: ${firstMsg}`, 'danger')
+        setIsSavingDraft(false)
+        return
+      }
+
+      // Clear any prior validation errors if validation passed
+      setItemValidationErrors({})
+      setStockWarningBanner(null)
+
+      if (editingOrderId) {
+        const res = await updatePosOrder(editingOrderId, payload)
+        if (res?.ok && res.data?.success) {
+          const updated = res.data.data?.order || res.data.data
+          showPosNotification(`Draft order #${updated?.orderNumber || editingOrderNumber} updated successfully! (Total: ${formatCurrency(updated?.totalAmount ?? updated?.subtotal)})`, 'success')
+          setEditingOrderId(null)
+          setEditingOrderNumber(null)
+          setSearchParams({})
+          setCart([])
+        } else {
+          const msg = res?.data?.message || res?.error || 'Failed to update draft order.'
+          showPosNotification(msg, 'danger')
+          if (res?.data?.items) {
+            const errMap = {}
+            res.data.items.filter((it) => !it.valid).forEach((it) => {
+              errMap[it.productId] = it.message
+            })
+            setItemValidationErrors(errMap)
+          }
+        }
+      } else {
+        const idempotencyKey = `pos-draft-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+        const res = await createPosOrder(payload, idempotencyKey)
+        if (res?.ok && res.data?.success) {
+          const created = res.data.data?.order || res.data.data
+          showPosNotification(`Draft order #${created?.orderNumber} saved successfully! (Total: ${formatCurrency(created?.totalAmount ?? created?.subtotal)})`, 'success')
+          setCart([])
+        } else {
+          const msg = res?.data?.message || res?.error || 'Failed to save draft order.'
+          showPosNotification(msg, 'danger')
+          if (res?.data?.items) {
+            const errMap = {}
+            res.data.items.filter((it) => !it.valid).forEach((it) => {
+              errMap[it.productId] = it.message
+            })
+            setItemValidationErrors(errMap)
+          }
+        }
+      }
+    } catch (err) {
+      showPosNotification(err.message || 'Error communicating with server.', 'danger')
+    } finally {
+      setIsSavingDraft(false)
+    }
+  }
+
+  const handleCancelEditingDraft = () => {
+    setEditingOrderId(null)
+    setEditingOrderNumber(null)
+    setSearchParams({})
+    setCart([])
+    showPosNotification('Exited draft order editing.', 'info')
+  }
+
+  const handleVoidSale = () => {
+    if (cart.length === 0) {
+      navigate(paths.orders)
+      return
+    }
+    if (window.confirm('Void current sale and clear cart?')) {
+      setCart([])
+      setEditingOrderId(null)
+      setEditingOrderNumber(null)
+      setItemValidationErrors({})
+      setStockWarningBanner(null)
+      setSearchParams({})
+      showPosNotification('Current sale voided and cart cleared.', 'info')
+    }
+  }
+
+  const handleDiscountFocus = () => {
+    const discountEl = document.querySelector('.discount-toggle') || document.querySelector('.checkout-section')
+    if (discountEl) {
+      discountEl.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }
+    showPosNotification('Select discount (% or $) and enter value in the checkout panel below.', 'info')
+  }
+
+  const handleHoldSaleClick = async () => {
+    if (cart.length === 0) {
+      navigate(paths.orders)
+      return
+    }
+    await handleSaveDraftOrder()
+  }
+
+  const handleConfirmCompleteOrder = async () => {
+    if (!editingOrderId) return
+    setIsCompletingOrder(true)
+    setCompletionError(null)
+
+    try {
+      const res = await completePosOrder(editingOrderId)
+      if (res?.ok && res.data?.success) {
+        const completed = res.data.data?.order || res.data.data
+        const completedNum = completed?.orderNumber || editingOrderNumber
+        showPosNotification(`Order #${completedNum} completed successfully! Stock deducted.`, 'success')
+        setShowCompleteConfirmModal(false)
+        setEditingOrderId(null)
+        setEditingOrderNumber(null)
+        setSearchParams({})
+        setCart([])
+
+        // Refresh product stock in catalog
+        getProducts({ status: 'Active', all: true }).then((pRes) => {
+          if (pRes?.ok && pRes.data?.success) {
+            const list = pRes.data.data?.products || []
+            if (Array.isArray(list) && list.length > 0) {
+              setProducts(list.map((p) => ({
+                id: p.id,
+                name: p.name,
+                sku: p.sku,
+                barcode: p.barcode || '',
+                price: Number(p.sellingPrice ?? 0),
+                stock: p.stock ?? 0,
+                taxRate: (Number(p.taxRate ?? 15)) / 100,
+                category: p.category || 'General',
+              })))
+            }
+          }
+        }).catch(() => {})
+      } else {
+        const msg = res?.data?.message || res?.error || 'Failed to complete order.'
+        setCompletionError(msg)
+        showPosNotification(`Order completion failed: ${msg}`, 'danger')
+      }
+    } catch (err) {
+      setCompletionError(err.message || 'Error communicating with server.')
+      showPosNotification(err.message || 'Error communicating with server.', 'danger')
+    } finally {
+      setIsCompletingOrder(false)
+    }
   }
 
   const handleBarcodeScan = async (rawCode, isFromModal = false) => {
@@ -414,11 +832,20 @@ function POSRegisterPage() {
           barcode: prod.barcode,
           price: Number(prod.price ?? prod.sellingPrice ?? 0),
           quantity: 1,
+          stock: prod.stock ?? 0,
           taxRate: (Number(prod.taxRate ?? 15)) / 100,
           category: prod.category || 'General',
         }
 
+        playScanBeep()
         addToCart(cartItem)
+        setStockAvailability((prev) => ({
+          ...prev,
+          [prod.id]: {
+            availableQuantity: prod.stock ?? 0,
+            currentStock: prod.stock ?? 0,
+          },
+        }))
 
         if (isFromModal) {
           setShowScanModal(false)
@@ -426,6 +853,7 @@ function POSRegisterPage() {
           setScanError('')
         } else {
           setSearch('')
+          if (searchInputRef.current) searchInputRef.current.value = ''
           setScanNotification({
             message: `Scanned & added: "${prod.name}" (${prod.barcode || prod.sku})`,
             tone: 'success',
@@ -467,6 +895,7 @@ function POSRegisterPage() {
           return
         }
 
+        playScanBeep()
         addToCart(fallbackMatch)
         if (isFromModal) {
           setShowScanModal(false)
@@ -474,6 +903,7 @@ function POSRegisterPage() {
           setScanError('')
         } else {
           setSearch('')
+          if (searchInputRef.current) searchInputRef.current.value = ''
           setScanNotification({
             message: `Scanned & added: "${fallbackMatch.name}"`,
             tone: 'success',
@@ -534,6 +964,69 @@ function POSRegisterPage() {
 
   return (
     <div className="pos-page">
+      {/* Toast Notification */}
+      {posNotification && (
+        <div
+          style={{
+            position: 'fixed',
+            top: '20px',
+            right: '20px',
+            zIndex: 9999,
+            padding: '12px 20px',
+            borderRadius: '8px',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+            backgroundColor: posNotification.tone === 'danger'
+              ? 'rgba(239, 68, 68, 0.95)'
+              : posNotification.tone === 'info'
+                ? 'rgba(49, 130, 206, 0.95)'
+                : 'rgba(34, 197, 94, 0.95)',
+            color: '#fff',
+            fontWeight: 500,
+            fontSize: '14px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            animation: 'fadeIn 0.2s ease-in-out',
+          }}
+        >
+          <span>{posNotification.tone === 'danger' ? '⚠️' : posNotification.tone === 'info' ? 'ℹ️' : '✓'}</span>
+          <span>{posNotification.message}</span>
+        </div>
+      )}
+
+      {/* Editing Draft Order Banner */}
+      {editingOrderId && (
+        <div style={{
+          backgroundColor: '#ebf8ff',
+          borderBottom: '2px solid #3182ce',
+          padding: '10px 24px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          color: '#2b6cb0',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <span style={{ fontSize: '18px' }}>📝</span>
+            <div>
+              <strong>Editing Draft Order: #{editingOrderNumber}</strong>
+              <span style={{ display: 'block', fontSize: '12px', color: '#4a5568' }}>
+                You are currently updating an existing draft order. Changes will update this order without creating a duplicate.
+              </span>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <Button
+              variant="secondary"
+              type="button"
+              onClick={handleCancelEditingDraft}
+              style={{ fontSize: '13px', padding: '6px 14px' }}
+            >
+              Exit Draft
+            </Button>
+          </div>
+        </div>
+      )}
+
       <header className="pos-page__topbar">
         <div className="pos-brand">
           <span className="pos-brand__label">VANTRIX POS</span>
@@ -543,13 +1036,17 @@ function POSRegisterPage() {
           </div>
         </div>
 
-        <div className="pos-page__status">New Sale</div>
+        <div className="pos-page__status">
+          {editingOrderId ? `Editing Draft #${editingOrderNumber}` : 'New Sale'}
+        </div>
 
         <div className="pos-page__user">
-          <div className="pos-page__user-avatar">SJ</div>
+          <div className="pos-page__user-avatar">
+            {user?.fullName?.slice(0, 2).toUpperCase() || 'SJ'}
+          </div>
           <div className="pos-page__user-meta">
-            <span>Sarah Jenkins</span>
-            <small>Cashier • 09:42 AM</small>
+            <span>{user?.fullName || 'Sarah Jenkins'}</span>
+            <small>{user?.roleName || 'Cashier'} • {user?.storeName || 'Store'}</small>
           </div>
         </div>
       </header>
@@ -563,6 +1060,40 @@ function POSRegisterPage() {
             </div>
             <Badge tone="success">Open</Badge>
           </div>
+
+          {stockWarningBanner && (
+            <div style={{
+              margin: '0.5rem 1rem 0',
+              padding: '0.6rem 0.8rem',
+              borderRadius: '6px',
+              fontSize: '12px',
+              backgroundColor: 'rgba(239, 68, 68, 0.12)',
+              border: '1px solid rgba(239, 68, 68, 0.3)',
+              color: '#dc2626',
+              fontWeight: 500,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+            }}>
+              <span>⚠️</span>
+              <span>{stockWarningBanner}</span>
+            </div>
+          )}
+
+          {cartValidationMessage && (
+            <div style={{
+              margin: '0.5rem 1rem 0',
+              padding: '0.6rem 0.8rem',
+              borderRadius: '6px',
+              fontSize: '12px',
+              backgroundColor: 'rgba(239, 68, 68, 0.12)',
+              border: '1px solid rgba(239, 68, 68, 0.3)',
+              color: '#dc2626',
+              fontWeight: 500,
+            }}>
+              {cartValidationMessage}
+            </div>
+          )}
 
           <div className="pos-cart-table-wrap">
             {cart.length === 0 ? (
@@ -580,31 +1111,79 @@ function POSRegisterPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {cart.map((item) => (
-                    <tr key={item.id}>
-                      <td>
-                        <div className="pos-cart-product">
-                          <strong>{item.name}</strong>
-                          <small>{item.sku}</small>
-                        </div>
-                      </td>
-                      <td>
-                        <div className="quantity-stepper">
-                          <button type="button" onClick={() => updateQuantity(item.id, -1)}>-</button>
-                          <span>{item.quantity}</span>
-                          <button type="button" onClick={() => updateQuantity(item.id, 1)}>+</button>
-                        </div>
-                      </td>
-                      <td>{formatCurrency(item.price)}</td>
-                      <td>{formatCurrency(item.price * item.quantity * item.taxRate)}</td>
-                      <td>{formatCurrency(item.price * item.quantity)}</td>
-                      <td>
-                        <button type="button" className="cart-item__remove" onClick={() => removeItem(item.id)}>
-                          Remove
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                  {cart.map((item) => {
+                    const availInfo = stockAvailability[item.id]
+                    const availableQty = availInfo ? availInfo.availableQuantity : (typeof item.stock === 'number' ? item.stock : null)
+                    const hasError = Boolean(itemValidationErrors[item.id])
+                    const isExceedingStock = typeof availableQty === 'number' && item.quantity > availableQty
+
+                    return (
+                      <tr
+                        key={item.id}
+                        style={{
+                          backgroundColor: hasError ? 'rgba(239, 68, 68, 0.08)' : (isExceedingStock ? 'rgba(245, 158, 11, 0.08)' : undefined),
+                        }}
+                      >
+                        <td>
+                          <div className="pos-cart-product">
+                            <strong>{item.name}</strong>
+                            <small>{item.sku}</small>
+                            <div style={{ marginTop: '2px', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                              <span
+                                style={{
+                                  fontSize: '11px',
+                                  color: availableQty !== null && availableQty <= 0
+                                    ? '#ef4444'
+                                    : isExceedingStock
+                                    ? '#d97706'
+                                    : '#64748b',
+                                  fontWeight: isExceedingStock || (availableQty !== null && availableQty <= 0) ? 600 : 400,
+                                }}
+                              >
+                                {availableQty !== null ? `Stock: ${availableQty} avail` : 'Stock: checking...'}
+                              </span>
+                              {isExceedingStock && (
+                                <span
+                                  style={{
+                                    fontSize: '10px',
+                                    fontWeight: 700,
+                                    padding: '1px 5px',
+                                    borderRadius: '4px',
+                                    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+                                    color: '#ef4444',
+                                  }}
+                                >
+                                  Low Stock
+                                </span>
+                              )}
+                            </div>
+                            {itemValidationErrors[item.id] && (
+                              <div style={{ color: '#ef4444', fontSize: '11px', fontWeight: 600, marginTop: '2px' }}>
+                                ⚠️ {itemValidationErrors[item.id]}
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                        <td>
+                          <div className="quantity-stepper">
+                            <button type="button" onClick={() => updateQuantity(item.id, -1)}>-</button>
+                            <span style={{ color: isExceedingStock ? '#ef4444' : 'inherit', fontWeight: isExceedingStock ? 700 : 'inherit' }}>
+                              {item.quantity}
+                            </span>
+                            <button type="button" onClick={() => updateQuantity(item.id, 1)}>+</button>
+                          </div>
+                        </td>
+                        <td>{formatCurrency(item.price)}</td>
+                        <td>{formatCurrency(item.price * item.quantity * item.taxRate)}</td>
+                        <td>{formatCurrency(item.price * item.quantity)}</td>
+                        <td>
+                          <button type="button" className="cart-item__remove" onClick={() => removeItem(item.id)}>
+                            Remove
+                          </button>
+                        </td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             )}
@@ -619,6 +1198,51 @@ function POSRegisterPage() {
               <span>Subtotal</span>
               <strong>{formatCurrency(subtotal)}</strong>
             </div>
+          </div>
+
+          <div className="pos-cart-actions" style={{ padding: '0.75rem 1rem', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <Button
+              variant="primary"
+              type="button"
+              onClick={handleSaveDraftOrder}
+              disabled={isSavingDraft || cart.length === 0 || (!editingOrderId && !canCreateDraft) || (editingOrderId && !canUpdateDraft)}
+              style={{ width: '100%', padding: '0.7rem', fontWeight: 600, fontSize: '14px' }}
+            >
+              {isSavingDraft
+                ? (editingOrderId ? 'Updating Draft...' : 'Saving Draft...')
+                : (editingOrderId ? `Update Draft #${editingOrderNumber}` : 'Save Draft Order')}
+            </Button>
+
+            {editingOrderId && (
+              <>
+                <Button
+                  variant="success"
+                  type="button"
+                  onClick={() => setShowCompleteConfirmModal(true)}
+                  disabled={isSavingDraft || isCompletingOrder || cart.length === 0 || !canCompleteOrder}
+                  style={{
+                    width: '100%',
+                    padding: '0.7rem',
+                    fontWeight: 700,
+                    fontSize: '14px',
+                    backgroundColor: '#10b981',
+                    borderColor: '#10b981',
+                    color: '#fff',
+                  }}
+                >
+                  {isCompletingOrder ? 'Completing...' : `Complete Order #${editingOrderNumber}`}
+                </Button>
+                <Button
+                  variant="secondary"
+                  type="button"
+                  onClick={handleCancelEditingDraft}
+                  disabled={isSavingDraft || isCompletingOrder}
+                  style={{ width: '100%', fontSize: '13px' }}
+                >
+                  Cancel Draft Editing
+                </Button>
+              </>
+            )}
           </div>
         </aside>
 
@@ -635,18 +1259,20 @@ function POSRegisterPage() {
             <div className="product-search">
               <div className="product-search__field">
                 <input
+                  ref={searchInputRef}
                   type="text"
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
                   onKeyDown={(event) => {
                     if (event.key === 'Enter') {
                       event.preventDefault()
-                      if (search.trim()) {
-                        handleBarcodeScan(search.trim(), false)
+                      const code = (event.target.value || search).trim()
+                      if (code) {
+                        handleBarcodeScan(code, false)
                       }
                     }
                   }}
-                  placeholder="Search product / SKU / scan barcode (Press Enter to scan)"
+                  placeholder="Search product / SKU / scan barcode (Press Enter or scan)"
                 />
               </div>
               <Button variant="primary" type="button" onClick={() => setShowScanModal(true)}>Scan</Button>
@@ -683,21 +1309,51 @@ function POSRegisterPage() {
           </section>
 
           <section className="pos-product-grid" aria-label="Products">
-            {visibleProducts.map((product) => (
-              <button
-                key={product.id}
-                type="button"
-                className="pos-product-item"
-                onClick={() => addToCart(product)}
-              >
-                <span className="pos-product-item__name">{product.name}</span>
-                <span className="pos-product-item__sku">{product.sku}</span>
-                <span className="pos-product-item__meta">
-                  <strong>{formatCurrency(product.price)}</strong>
-                  <small>{product.stock} in stock</small>
-                </span>
-              </button>
-            ))}
+            {visibleProducts.map((product) => {
+              const avail = stockAvailability[product.id]?.availableQuantity !== undefined
+                ? stockAvailability[product.id].availableQuantity
+                : product.stock
+              const isLow = typeof avail === 'number' && avail > 0 && avail < 5
+              const isOut = typeof avail === 'number' && avail <= 0
+
+              return (
+                <button
+                  key={product.id}
+                  type="button"
+                  className="pos-product-item"
+                  onClick={() => addToCart(product)}
+                >
+                  <span className="pos-product-item__name">{product.name}</span>
+                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center', margin: '2px 0 4px', flexWrap: 'wrap' }}>
+                    <span style={{
+                      fontSize: '0.62rem',
+                      fontWeight: 700,
+                      textTransform: 'uppercase',
+                      padding: '2px 6px',
+                      borderRadius: '4px',
+                      background: '#f1f5f9',
+                      color: '#475569',
+                    }}>
+                      {product.category || 'General'}
+                    </span>
+                    <span className="pos-product-item__sku">{product.sku}</span>
+                  </div>
+                  <span className="pos-product-item__meta">
+                    <strong>{formatCurrency(product.price)}</strong>
+                    <small style={{
+                      background: isOut ? '#fef2f2' : isLow ? '#fffbeb' : '#ecfdf5',
+                      color: isOut ? '#b91c1c' : isLow ? '#b45309' : '#047857',
+                      border: `1px solid ${isOut ? '#fecaca' : isLow ? '#fde68a' : '#a7f3d0'}`,
+                      borderRadius: '6px',
+                      padding: '2px 7px',
+                      fontWeight: 700,
+                    }}>
+                      {avail !== undefined && avail !== Infinity ? `${avail} in stock` : `${product.stock} in stock`}
+                    </small>
+                  </span>
+                </button>
+              )
+            })}
           </section>
         </main>
 
@@ -710,14 +1366,71 @@ function POSRegisterPage() {
           </div>
 
           <div className="pos-quick-actions">
-            <button type="button" className="pos-quick-action">Return</button>
-            <button type="button" className="pos-quick-action">Exchange</button>
-            <button type="button" className="pos-quick-action">Void</button>
-            <button type="button" className="pos-quick-action">Discount</button>
-            <button type="button" className="pos-quick-action">Hold Sale</button>
-            <button type="button" className="pos-quick-action">Recall</button>
-            <button type="button" className="pos-quick-action" onClick={() => setShowCustomerModal(true)}>Customer</button>
-            <button type="button" className="pos-quick-action">Receipt</button>
+            <button
+              type="button"
+              className="pos-quick-action"
+              onClick={() => navigate(paths.returns)}
+              title="Navigate to Returns Management"
+            >
+              ↩️ Return
+            </button>
+            <button
+              type="button"
+              className="pos-quick-action"
+              onClick={() => navigate(paths.returns)}
+              title="Navigate to Returns & Exchanges"
+            >
+              🔄 Exchange
+            </button>
+            <button
+              type="button"
+              className="pos-quick-action"
+              onClick={handleVoidSale}
+              title="Void current sale and clear cart"
+            >
+              🚫 Void
+            </button>
+            <button
+              type="button"
+              className="pos-quick-action"
+              onClick={handleDiscountFocus}
+              title="Apply discount in checkout"
+            >
+              🏷️ Discount
+            </button>
+            <button
+              type="button"
+              className="pos-quick-action"
+              onClick={handleHoldSaleClick}
+              disabled={isSavingDraft || (!editingOrderId && !canCreateDraft && cart.length > 0) || (editingOrderId && !canUpdateDraft)}
+              title={cart.length > 0 ? "Save cart as draft order" : "Navigate to saved orders"}
+            >
+              {isSavingDraft ? '⏳ Saving...' : (editingOrderId ? '💾 Update Draft' : (cart.length > 0 ? '⏸️ Hold Sale' : '⏸️ Held Orders'))}
+            </button>
+            <button
+              type="button"
+              className="pos-quick-action"
+              onClick={() => navigate(paths.orders)}
+              title="Navigate to Saved Draft Orders"
+            >
+              📋 Recall
+            </button>
+            <button
+              type="button"
+              className="pos-quick-action"
+              onClick={() => navigate(paths.customers)}
+              title="Navigate to Customer Management"
+            >
+              👤 Customer
+            </button>
+            <button
+              type="button"
+              className="pos-quick-action"
+              onClick={() => navigate(paths.invoices)}
+              title="Navigate to Invoices & Receipts"
+            >
+              🧾 Receipt
+            </button>
           </div>
 
           <div className="pos-shortcuts">
@@ -904,9 +1617,32 @@ function POSRegisterPage() {
             {paymentValidationMessage && <div className="payment-inline-error">{paymentValidationMessage}</div>}
             {cartValidationMessage && <div className="payment-inline-error">{cartValidationMessage}</div>}
 
-            <Button variant="primary" type="button" className="complete-sale-btn" onClick={completeSale}>
-              Complete Sale
-            </Button>
+            <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
+              <Button
+                variant="secondary"
+                type="button"
+                onClick={handleSaveDraftOrder}
+                disabled={isSavingDraft || cart.length === 0 || (!editingOrderId && !canCreateDraft) || (editingOrderId && !canUpdateDraft)}
+                style={{ flex: 1, padding: '0.75rem', fontWeight: 600 }}
+              >
+                {isSavingDraft ? 'Saving...' : (editingOrderId ? 'Update Draft' : 'Save Draft')}
+              </Button>
+              {editingOrderId ? (
+                <Button
+                  variant="success"
+                  type="button"
+                  style={{ flex: 1, backgroundColor: '#10b981', borderColor: '#10b981', color: '#fff', fontWeight: 700 }}
+                  onClick={() => setShowCompleteConfirmModal(true)}
+                  disabled={isSavingDraft || isCompletingOrder || cart.length === 0 || !canCompleteOrder}
+                >
+                  {isCompletingOrder ? 'Completing...' : 'Complete Order'}
+                </Button>
+              ) : (
+                <Button variant="primary" type="button" className="complete-sale-btn" style={{ flex: 1 }} onClick={completeSale}>
+                  Complete Sale
+                </Button>
+              )}
+            </div>
           </div>
         </section>
       </div>
@@ -1159,6 +1895,129 @@ function POSRegisterPage() {
           isSubmitting={isCreatingCustomer}
           serverError={addCustomerError}
         />
+      )}
+      {/* Complete Order Confirmation Modal (Step 13) */}
+      {showCompleteConfirmModal && (
+        <div className="modal-backdrop" onClick={() => !isCompletingOrder && setShowCompleteConfirmModal(false)}>
+          <div className="modal" style={{ maxWidth: '480px', width: '92%' }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal__header">
+              <div>
+                <span className="section-label">Order Completion</span>
+                <h3>Confirm POS Order Completion</h3>
+              </div>
+              <button
+                type="button"
+                className="modal__close"
+                onClick={() => !isCompletingOrder && setShowCompleteConfirmModal(false)}
+                disabled={isCompletingOrder}
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="modal__body" style={{ padding: '1.25rem 1.5rem' }}>
+              <div
+                style={{
+                  padding: '0.75rem 1rem',
+                  borderRadius: '6px',
+                  backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                  border: '1px solid rgba(16, 185, 129, 0.3)',
+                  color: '#065f46',
+                  fontSize: '0.875rem',
+                  fontWeight: 500,
+                  marginBottom: '1rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                }}
+              >
+                <span>📦</span>
+                <span>Complete this POS order? Stock quantities will be deducted from the selected store.</span>
+              </div>
+
+              <div className="modal__row">
+                <span>Order Number</span>
+                <strong>#{editingOrderNumber}</strong>
+              </div>
+
+              <div className="modal__row">
+                <span>Store</span>
+                <strong>{user?.storeName || 'Main Store'}</strong>
+              </div>
+
+              <div className="modal__row">
+                <span>Customer</span>
+                <strong>
+                  {customer.name}
+                  {customer.isWalkIn ? ' [Walk-in]' : ''}
+                </strong>
+              </div>
+
+              <div className="modal__row">
+                <span>Total Items</span>
+                <strong>{cart.length} item line{cart.length === 1 ? '' : 's'}</strong>
+              </div>
+
+              <div className="modal__row">
+                <span>Total Quantity</span>
+                <strong>{cart.reduce((sum, item) => sum + item.quantity, 0)} units</strong>
+              </div>
+
+              <div className="modal__row modal__row--total" style={{ marginTop: '0.5rem', paddingTop: '0.75rem', borderTop: '2px solid var(--color-border, #e2e8f0)' }}>
+                <span>Order Total</span>
+                <strong style={{ fontSize: '1.25rem', color: 'var(--color-primary, #3182ce)' }}>
+                  {formatCurrency(total)}
+                </strong>
+              </div>
+
+              {completionError && (
+                <div
+                  style={{
+                    marginTop: '1rem',
+                    padding: '0.65rem 0.85rem',
+                    borderRadius: '6px',
+                    backgroundColor: 'rgba(239, 68, 68, 0.12)',
+                    border: '1px solid rgba(239, 68, 68, 0.3)',
+                    color: '#dc2626',
+                    fontSize: '0.85rem',
+                    fontWeight: 500,
+                  }}
+                >
+                  ⚠️ {completionError}
+                </div>
+              )}
+            </div>
+
+            <div className="modal__actions" style={{ padding: '1rem 1.5rem', display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+              <Button
+                variant="secondary"
+                type="button"
+                onClick={() => {
+                  setShowCompleteConfirmModal(false)
+                  setCompletionError(null)
+                }}
+                disabled={isCompletingOrder}
+              >
+                Back
+              </Button>
+              <Button
+                variant="success"
+                type="button"
+                onClick={handleConfirmCompleteOrder}
+                disabled={isCompletingOrder}
+                style={{
+                  backgroundColor: '#10b981',
+                  borderColor: '#10b981',
+                  color: '#fff',
+                  fontWeight: 600,
+                  padding: '0.6rem 1.2rem',
+                }}
+              >
+                {isCompletingOrder ? 'Completing Order...' : 'Confirm & Complete Order'}
+              </Button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

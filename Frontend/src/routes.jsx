@@ -1,4 +1,5 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
+import { paths } from './paths'
 import DashboardPage from './components/DashboardPage'
 import PlaceholderPage from './components/PlaceholderPage'
 import POSRegisterPage from './components/POSRegisterPage'
@@ -17,26 +18,6 @@ import NotFoundPage from './components/NotFoundPage'
 import ProfilePage from './components/profile/ProfilePage'
 import ProtectedRoute from './components/auth/ProtectedRoute'
 import { PERMISSIONS } from './auth/permissions'
-
-const paths = {
-  login: '/login',
-  signup: '/signup',
-  forgotPassword: '/forgot-password',
-  dashboard: '/dashboard',
-  pos: '/pos',
-  products: '/products',
-  categories: '/categories',
-  suppliers: '/suppliers',
-  inventory: '/inventory',
-  customers: '/customers',
-  orders: '/orders',
-  invoices: '/invoices',
-  returns: '/returns',
-  reports: '/reports',
-  users: '/users',
-  settings: '/settings',
-  profile: '/profile',
-}
 
 // `permission` is the frontend (UX-only) guard for each screen; see src/auth/permissions.js.
 const routeDefinitions = [
