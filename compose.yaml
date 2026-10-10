@@ -1,0 +1,44 @@
+services:
+  frontend:
+    build:
+      context: ./Frontend
+      dockerfile: Dockerfile.dev
+    ports:
+      - "127.0.0.1:5173:5173"
+    develop:
+      watch:
+        - action: sync
+          path: ./Frontend
+          target: /app
+          ignore:
+            - node_modules/
+            - package.json
+            - package-lock.json
+        - action: rebuild
+          path: ./Frontend/package.json
+        - action: rebuild
+          path: ./Frontend/package-lock.json
+
+  backend:
+    build:
+      context: ./Backend
+      dockerfile: Dockerfile.dev
+    env_file:
+      - ./Backend/.env
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      PORT: "3000"
+    develop:
+      watch:
+        - action: sync
+          path: ./Backend
+          target: /app
+          ignore:
+            - node_modules/
+            - package.json
+            - package-lock.json
+        - action: rebuild
+          path: ./Backend/package.json
+        - action: rebuild
+          path: ./Backend/package-lock.json
