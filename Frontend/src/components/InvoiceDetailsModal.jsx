@@ -1,10 +1,11 @@
 import Badge from './ui/Badge'
 import Button from './ui/Button'
 
-function formatCurrency(value) {
+function formatCurrency(value, currency) {
+  if (!currency) return `${Number(value).toFixed(2)} (currency unavailable)`
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
-    currency: 'USD',
+    currency,
   }).format(value)
 }
 
@@ -73,19 +74,19 @@ function InvoiceDetailsModal({ invoice, onClose }) {
           <h4>Invoice Summary</h4>
           <div className="modal__row">
             <span>Subtotal</span>
-            <strong>{formatCurrency(invoice.subtotal)}</strong>
+            <strong>{formatCurrency(invoice.subtotal, invoice.currencyCode)}</strong>
           </div>
           <div className="modal__row">
             <span>Discount</span>
-            <strong>{formatCurrency(invoice.discount)}</strong>
+            <strong>{formatCurrency(invoice.discount, invoice.currencyCode)}</strong>
           </div>
           <div className="modal__row">
             <span>Tax</span>
-            <strong>{formatCurrency(invoice.tax)}</strong>
+            <strong>{formatCurrency(invoice.tax, invoice.currencyCode)}</strong>
           </div>
           <div className="modal__row modal__row--total">
             <span>Total</span>
-            <strong>{formatCurrency(invoice.total)}</strong>
+            <strong>{formatCurrency(invoice.total, invoice.currencyCode)}</strong>
           </div>
         </div>
 
@@ -105,9 +106,9 @@ function InvoiceDetailsModal({ invoice, onClose }) {
               <span>{item.name}</span>
               <span>{item.sku}</span>
               <span>{item.quantity}</span>
-              <span>{formatCurrency(item.unitPrice)}</span>
+              <span>{formatCurrency(item.unitPrice, invoice.currencyCode)}</span>
               <span>{item.taxRate}%</span>
-              <span>{formatCurrency(item.lineTotal)}</span>
+              <span>{formatCurrency(item.lineTotal, invoice.currencyCode)}</span>
             </div>
           ))}
         </div>

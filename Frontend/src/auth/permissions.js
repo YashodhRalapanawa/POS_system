@@ -1,6 +1,8 @@
+import { hasPermission } from './permissionCheck.mjs'
+export { hasPermission } from './permissionCheck.mjs'
 import { useAuth } from '../context/AuthContext'
 
-// Single source of truth for frontend role permissions.
+// Role templates for the role editor. Live access uses server-supplied permissions.
 //
 // IMPORTANT: frontend authorization is a UX guard only — it hides navigation
 // and blocks routes in the browser, but anyone can bypass it. Real enforcement
@@ -141,19 +143,6 @@ export function registerCustomRolePermissions(roleName, permissions = []) {
 }
 
 // No permission required → allowed for any signed-in user.
-export function hasPermission(user, permission) {
-  if (!user) return false
-  if (!permission) return true
-
-  // Support dynamic permissions list returned from backend user session
-  if (Array.isArray(user.permissions) && user.permissions.length > 0) {
-    if (user.permissions.includes(permission)) return true
-    if (user.role === 'Admin' || user.roleCode === 'ADMIN' || user.role?.code === 'ADMIN') return true
-  }
-
-  const roleName = typeof user.role === 'object' ? user.role?.name : user.role
-  return (ROLE_PERMISSIONS[roleName] || []).includes(permission)
-}
 
 export function usePermission(permission) {
   const { user } = useAuth()

@@ -1,13 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
-import { authUsers } from '../../data/mockUsers'
 import { paths } from '../../routes'
 import Button from '../ui/Button'
 import AuthBrand from './AuthBrand'
-
-// Demo-only helper list: role + username, no passwords rendered per row.
-const demoAccounts = authUsers.map(({ id, username, role, status }) => ({ id, username, role, status }))
 
 function LoginPage() {
   const { login } = useAuth()
@@ -62,13 +58,6 @@ function LoginPage() {
       setPassword('')
       passwordRef.current?.focus()
     }
-  }
-
-  const fillDemoAccount = (username) => {
-    setIdentifier(username)
-    setFieldErrors((current) => ({ ...current, identifier: undefined }))
-    setAuthError('')
-    passwordRef.current?.focus()
   }
 
   return (
@@ -170,34 +159,11 @@ function LoginPage() {
         </section>
 
         <p className="auth-footer">
-          New to Vantrix?{' '}
-          <Link to={paths.signup} className="auth-link">
-            Create a business account
-          </Link>
+          Need a staff account? Contact your administrator.{' '}
+
         </p>
 
-        <section className="auth-demo" aria-labelledby="auth-demo-title">
-          <div className="auth-demo__header">
-            <h2 id="auth-demo-title">Demo accounts</h2>
-            <span>Password for all: <code>demo1234</code></span>
-          </div>
-          <ul className="auth-demo__list">
-            {demoAccounts.map((account) => (
-              <li key={account.id}>
-                <button
-                  type="button"
-                  className="auth-demo__row"
-                  onClick={() => fillDemoAccount(account.username)}
-                  disabled={submitting}
-                >
-                  <span className="auth-demo__role">{account.role}</span>
-                  <code>{account.username}</code>
-                  {account.status !== 'Active' && <span className="auth-demo__status">{account.status}</span>}
-                </button>
-              </li>
-            ))}
-          </ul>
-        </section>
+
       </div>
     </div>
   )

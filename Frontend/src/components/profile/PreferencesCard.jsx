@@ -45,15 +45,15 @@ function PreferencesCard() {
 
   const handleSubmit = (event) => {
     event.preventDefault()
-    updatePreferences(draft)
-    setMessage('Preferences saved.')
+    const result = updatePreferences(draft)
+    setMessage(result.ok ? 'Preferences saved on this device.' : 'Unable to save preferences on this device.')
   }
 
   const resetToDefaults = () => {
     const defaults = normalize(defaultPreferences)
     setDraft(defaults)
-    updatePreferences(defaults)
-    setMessage('Preferences reset to defaults.')
+    const result = updatePreferences(defaults)
+    setMessage(result.ok ? 'Preferences reset on this device.' : 'Unable to save preferences on this device.')
   }
 
   return (

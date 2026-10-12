@@ -1,45 +1,18 @@
+import { readSession, SESSION_EXPIRED_EVENT } from './authSession.mjs'
+
 /**
  * API Service Utility for POS System
  * Configured with VITE_API_BASE_URL and automatic Bearer token authentication.
  */
 
-const rawBaseUrl = import.meta.env.VITE_API_BASE_URL || ''
+const rawBaseUrl = import.meta.env?.VITE_API_BASE_URL || ''
 export const API_BASE_URL = rawBaseUrl.endsWith('/') ? rawBaseUrl.slice(0, -1) : rawBaseUrl
 
 /**
  * Retrieves the current session's Supabase access token from browser storage.
  */
 export function getAuthToken() {
-  if (typeof window === 'undefined') return null
-
-  try {
-    // 1. Check vantrix session storage
-    for (const storage of [window.localStorage, window.sessionStorage]) {
-      if (!storage) continue
-      const raw = storage.getItem('vantrix.session')
-      if (raw) {
-        const parsed = JSON.parse(raw)
-        if (parsed?.accessToken) return parsed.accessToken
-        if (parsed?.token) return parsed.token
-      }
-    }
-
-    // 2. Check Supabase client default storage (sb-<ref>-auth-token)
-    for (let i = 0; i < window.localStorage.length; i++) {
-      const key = window.localStorage.key(i)
-      if (key && key.startsWith('sb-') && key.endsWith('-auth-token')) {
-        const raw = window.localStorage.getItem(key)
-        if (raw) {
-          const parsed = JSON.parse(raw)
-          if (parsed?.access_token) return parsed.access_token
-        }
-      }
-    }
-  } catch {
-    // Storage access unavailable
-  }
-
-  return null
+  return readSession()?.accessToken || null
 }
 
 /**
@@ -64,6 +37,9 @@ export async function apiFetch(endpoint, options = {}) {
       headers,
     })
 
+    if (response.status === 401 && token && getAuthToken() === token && !endpoint.startsWith('/api/auth/')) {
+      window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT))
+    }
     const data = await response.json().catch(() => null)
 
     return {
@@ -447,3 +423,12 @@ export async function updateCountryCurrencySettings(data) {
 
 
 
+
+export function getInvoices(params = {}, signal) {
+  const query = new URLSearchParams(Object.entries(params).filter(([, value]) => value !== '' && value != null))
+  return apiFetch(`/api/invoices?${query}`, { signal })
+}
+
+export function getInvoiceById(id, signal) {
+  return apiFetch(`/api/invoices/${encodeURIComponent(id)}`, { signal })
+}

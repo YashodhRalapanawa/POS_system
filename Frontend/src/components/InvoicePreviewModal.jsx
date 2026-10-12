@@ -1,9 +1,10 @@
 import Button from './ui/Button'
 
-function formatCurrency(value) {
+function formatCurrency(value, currency) {
+  if (!currency) return `${Number(value).toFixed(2)} (currency unavailable)`
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
-    currency: 'USD',
+    currency,
   }).format(value)
 }
 
@@ -29,9 +30,9 @@ function InvoicePreviewModal({ invoice, order, onClose }) {
   const customerPhone = activeInvoice.customerPhone ?? '—'
   const customerEmail = activeInvoice.customerEmail ?? '—'
   const invoiceDate = activeInvoice.invoiceDate ?? activeInvoice.createdAt ?? new Date().toISOString()
-  const dueDate = activeInvoice.dueDate ?? activeInvoice.createdAt ?? new Date().toISOString()
-  const paymentMethod = activeInvoice.paymentMethod ?? 'Card'
-  const paymentStatus = activeInvoice.paymentStatus ?? activeInvoice.status ?? 'Paid'
+  const dueDate = activeInvoice.dueDate ?? null
+  const paymentMethod = activeInvoice.paymentMethod ?? '—'
+  const paymentStatus = activeInvoice.paymentStatus ?? activeInvoice.status ?? 'Pending'
   const subtotal = activeInvoice.subtotal ?? 0
   const discount = activeInvoice.discount ?? 0
   const tax = activeInvoice.tax ?? 0
@@ -107,9 +108,9 @@ function InvoicePreviewModal({ invoice, order, onClose }) {
               <div key={`${invoiceNumber}-${item.name ?? item.sku ?? index}`} className="invoice-preview__row">
                 <span>{item.name}</span>
                 <span>{item.quantity}</span>
-                <span>{formatCurrency(item.unitPrice)}</span>
-                <span>{item.taxRate ?? 8}%</span>
-                <span>{formatCurrency(item.lineTotal ?? item.unitPrice * item.quantity)}</span>
+                <span>{formatCurrency(item.unitPrice, activeInvoice.currencyCode)}</span>
+                <span>{item.taxRate ?? 0}%</span>
+                <span>{formatCurrency(item.lineTotal ?? item.unitPrice * item.quantity, activeInvoice.currencyCode)}</span>
               </div>
             ))}
           </div>
@@ -117,19 +118,19 @@ function InvoicePreviewModal({ invoice, order, onClose }) {
           <div className="invoice-preview__totals">
             <div className="modal__row">
               <span>Subtotal</span>
-              <strong>{formatCurrency(subtotal)}</strong>
+              <strong>{formatCurrency(subtotal, activeInvoice.currencyCode)}</strong>
             </div>
             <div className="modal__row">
               <span>Discount</span>
-              <strong>{formatCurrency(discount)}</strong>
+              <strong>{formatCurrency(discount, activeInvoice.currencyCode)}</strong>
             </div>
             <div className="modal__row">
               <span>Tax</span>
-              <strong>{formatCurrency(tax)}</strong>
+              <strong>{formatCurrency(tax, activeInvoice.currencyCode)}</strong>
             </div>
             <div className="modal__row modal__row--total">
               <span>Total</span>
-              <strong>{formatCurrency(total)}</strong>
+              <strong>{formatCurrency(total, activeInvoice.currencyCode)}</strong>
             </div>
           </div>
 

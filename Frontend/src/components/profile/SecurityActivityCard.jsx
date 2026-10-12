@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
-import { getMockActivity } from '../../data/mockActivity'
 import { paths } from '../../routes'
 import Badge from '../ui/Badge'
 import Button from '../ui/Button'
@@ -51,18 +50,18 @@ function SignOutModal({ onCancel, onConfirm }) {
   )
 }
 
-function SecurityActivityCard({ user }) {
+function SecurityActivityCard() {
   const { activity, sessionStartedAt, logout } = useAuth()
   const navigate = useNavigate()
   const [confirmOpen, setConfirmOpen] = useState(false)
 
-  // Session entries first (newest), then mock history, newest first.
+  // Only actual session activity; never fabricate security history.
   const recentActivity = useMemo(
     () =>
-      [...activity, ...getMockActivity(user)]
+      [...activity]
         .sort((a, b) => Date.parse(b.at) - Date.parse(a.at))
         .slice(0, MAX_ACTIVITY),
-    [activity, user],
+    [activity],
   )
 
   const closeConfirm = useCallback(() => setConfirmOpen(false), [])
@@ -91,6 +90,7 @@ function SecurityActivityCard({ user }) {
       </div>
 
       <h4 className="profile-subheading">Recent activity</h4>
+      {recentActivity.length === 0 && <p>Account activity history is not available yet.</p>}
       <ul className="profile-activity">
         {recentActivity.map((entry) => (
           <li key={entry.id}>
