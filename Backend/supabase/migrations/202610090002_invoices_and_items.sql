@@ -139,4 +139,3 @@ join public.order_items oi on oi.order_id = i.order_id and oi.store_id = i.store
 where not exists (
   select 1 from public.invoice_items ii where ii.invoice_id = i.id
 );
-
