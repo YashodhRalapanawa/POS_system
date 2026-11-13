@@ -444,6 +444,198 @@ export async function updateCountryCurrencySettings(data) {
   })
 }
 
+/**
+ * Developer 2: Taxes & Tax Configuration APIs
+ */
+
+export async function getTaxes(params = {}) {
+  const query = new URLSearchParams()
+  if (params.storeId) query.set('storeId', params.storeId)
+  if (params.status) query.set('status', params.status)
+  const qs = query.toString() ? `?${query.toString()}` : ''
+  return apiFetch(`/api/taxes${qs}`, { method: 'GET' })
+}
+
+export async function createTax(taxData) {
+  return apiFetch('/api/taxes', {
+    method: 'POST',
+    body: JSON.stringify(taxData),
+  })
+}
+
+export async function updateTax(taxId, taxData) {
+  return apiFetch(`/api/taxes/${taxId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(taxData),
+  })
+}
+
+/**
+ * Developer 2: Invoices APIs
+ */
+
+export async function getInvoices(params = {}) {
+  const query = new URLSearchParams()
+  if (params.search) query.set('search', params.search)
+  if (params.status && params.status !== 'All Status' && params.status !== 'All') query.set('status', params.status)
+  if (params.paymentMethod && params.paymentMethod !== 'All Payment Methods' && params.paymentMethod !== 'All') {
+    query.set('paymentMethod', params.paymentMethod)
+  }
+  if (params.customerType && params.customerType !== 'All Customer Types' && params.customerType !== 'All') {
+    query.set('customerType', params.customerType)
+  }
+  if (params.dateFilter && params.dateFilter !== 'All Dates') query.set('date', params.dateFilter)
+  if (params.startDate) query.set('startDate', params.startDate)
+  if (params.endDate) query.set('endDate', params.endDate)
+  if (params.page) query.set('page', String(params.page))
+  if (params.limit) query.set('limit', String(params.limit))
+  if (params.all) query.set('all', 'true')
+
+  const qs = query.toString() ? `?${query.toString()}` : ''
+  return apiFetch(`/api/invoices${qs}`, { method: 'GET' })
+}
+
+export async function getInvoiceById(invoiceId) {
+  return apiFetch(`/api/invoices/${invoiceId}`, { method: 'GET' })
+}
+
+export async function createInvoice(invoiceData) {
+  return apiFetch('/api/invoices', {
+    method: 'POST',
+    body: JSON.stringify(invoiceData),
+  })
+}
+
+export async function getInvoiceByOrderId(orderId) {
+  return apiFetch(`/api/invoices/order/${orderId}`, { method: 'GET' })
+}
+
+/**
+ * Developer 2: Payments & Receipts APIs
+ */
+
+export async function getPayments(params = {}) {
+  const query = new URLSearchParams()
+  if (params.orderId) query.set('orderId', params.orderId)
+  if (params.invoiceId) query.set('invoiceId', params.invoiceId)
+  if (params.method) query.set('method', params.method)
+  if (params.status) query.set('status', params.status)
+  if (params.page) query.set('page', String(params.page))
+  if (params.limit) query.set('limit', String(params.limit))
+
+  const qs = query.toString() ? `?${query.toString()}` : ''
+  return apiFetch(`/api/payments${qs}`, { method: 'GET' })
+}
+
+export async function createPayment(paymentData) {
+  return apiFetch('/api/payments', {
+    method: 'POST',
+    body: JSON.stringify(paymentData),
+  })
+}
+
+export async function getPaymentById(paymentId) {
+  return apiFetch(`/api/payments/${paymentId}`, { method: 'GET' })
+}
+
+export async function getPaymentsByInvoiceId(invoiceId) {
+  return apiFetch(`/api/payments/invoice/${invoiceId}`, { method: 'GET' })
+}
+
+export async function getReceipt(invoiceId) {
+  return apiFetch(`/api/receipts/${invoiceId}`, { method: 'GET' })
+}
+
+/**
+ * Developer 2: Returns & Credit Notes APIs
+ */
+
+export async function getReturns(params = {}) {
+  const query = new URLSearchParams()
+  if (params.search) query.set('search', params.search)
+  if (params.status && params.status !== 'All Status' && params.status !== 'All') query.set('status', params.status)
+  if (params.refundMethod && params.refundMethod !== 'All Refund Methods' && params.refundMethod !== 'All') {
+    query.set('refundMethod', params.refundMethod)
+  }
+  if (params.reason && params.reason !== 'All Reasons' && params.reason !== 'All') query.set('reason', params.reason)
+  if (params.dateFilter && params.dateFilter !== 'All Dates') query.set('date', params.dateFilter)
+  if (params.page) query.set('page', String(params.page))
+  if (params.limit) query.set('limit', String(params.limit))
+  if (params.all) query.set('all', 'true')
+
+  const qs = query.toString() ? `?${query.toString()}` : ''
+  return apiFetch(`/api/returns${qs}`, { method: 'GET' })
+}
+
+export async function getReturnById(returnId) {
+  return apiFetch(`/api/returns/${returnId}`, { method: 'GET' })
+}
+
+export async function createReturn(returnData) {
+  return apiFetch('/api/returns', {
+    method: 'POST',
+    body: JSON.stringify(returnData),
+  })
+}
+
+export async function updateReturnStatus(returnId, statusData) {
+  return apiFetch(`/api/returns/${returnId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(statusData),
+  })
+}
+
+export async function getCreditNotes(params = {}) {
+  const query = new URLSearchParams()
+  if (params.search) query.set('search', params.search)
+  if (params.status) query.set('status', params.status)
+  if (params.page) query.set('page', String(params.page))
+  if (params.limit) query.set('limit', String(params.limit))
+
+  const qs = query.toString() ? `?${query.toString()}` : ''
+  return apiFetch(`/api/credit-notes${qs}`, { method: 'GET' })
+}
+
+export async function getCreditNoteById(id) {
+  return apiFetch(`/api/credit-notes/${id}`, { method: 'GET' })
+}
+
+export async function createCreditNote(creditNoteData) {
+  return apiFetch('/api/credit-notes', {
+    method: 'POST',
+    body: JSON.stringify(creditNoteData),
+  })
+}
+
+/**
+ * Developer 2: Dashboard & Reports APIs
+ */
+
+export async function getDailyReport(params = {}) {
+  const query = new URLSearchParams()
+  if (params.date) query.set('date', params.date)
+  if (params.storeId) query.set('storeId', params.storeId)
+  const qs = query.toString() ? `?${query.toString()}` : ''
+  return apiFetch(`/api/reports/daily${qs}`, { method: 'GET' })
+}
+
+export async function getMonthlyReport(params = {}) {
+  const query = new URLSearchParams()
+  if (params.year) query.set('year', String(params.year))
+  if (params.month) query.set('month', String(params.month))
+  if (params.storeId) query.set('storeId', params.storeId)
+  const qs = query.toString() ? `?${query.toString()}` : ''
+  return apiFetch(`/api/reports/monthly${qs}`, { method: 'GET' })
+}
+
+export async function getDashboardSummary(params = {}) {
+  const query = new URLSearchParams()
+  if (params.storeId) query.set('storeId', params.storeId)
+  const qs = query.toString() ? `?${query.toString()}` : ''
+  return apiFetch(`/api/dashboard/summary${qs}`, { method: 'GET' })
+}
+
+
 
 
 
