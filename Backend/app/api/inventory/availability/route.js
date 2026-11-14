@@ -101,7 +101,7 @@ export async function GET(request) {
         const { data: products, error: prodErr } = await admin
             .from("products")
             .select(`
-                id, name, sku, status, unit_of_measure, selling_price,
+                id, name, sku, status, selling_price,
                 inventory (id, current_stock, reserved_stock, updated_at)
             `)
             .eq("store_id", effectiveStoreId)

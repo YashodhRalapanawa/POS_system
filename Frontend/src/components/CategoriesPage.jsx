@@ -4,7 +4,7 @@ import Card from './ui/Card'
 import Badge from './ui/Badge'
 import CategoryFormModal from './CategoryFormModal'
 import CategoryDetailsModal from './CategoryDetailsModal'
-import { categoryStatusOptions, defaultUnassignedProducts, initialCategories } from '../data/mockCategories'
+import { categoryStatusOptions } from '../data/mockCategories'
 import {
   getCategories,
   createCategory,
@@ -13,19 +13,19 @@ import {
 } from '../services/api'
 import { PERMISSIONS, usePermission } from '../auth/permissions'
 
-const CATEGORIES_STORAGE_KEY = 'vantrix.productCategories'
+const CATEGORIES_STORAGE_KEY = 'vantrix.productCategories.live'
 
 function loadInitialCategories() {
   try {
     const saved = localStorage.getItem(CATEGORIES_STORAGE_KEY)
     if (saved) {
       const parsed = JSON.parse(saved)
-      if (Array.isArray(parsed) && parsed.length > 0) {
+      if (Array.isArray(parsed)) {
         return parsed
       }
     }
   } catch {}
-  return initialCategories
+  return []
 }
 
 function formatDate(value) {
@@ -85,7 +85,7 @@ function CategoriesPage() {
           }
         } else if (res && !res.ok) {
           if (res.status === 401) {
-            setApiError('Session not authenticated. Displaying cached categories.')
+            // Silently use cached categories without showing alarming alert banner
           } else if (res.status === 403) {
             setApiError('Missing categories.view permission on server.')
           } else {
@@ -93,9 +93,7 @@ function CategoriesPage() {
           }
         }
       } catch {
-        if (isMounted) {
-          setApiError('Unable to connect to backend server. Using cached category data.')
-        }
+        // Graceful fallback to cached data
       } finally {
         if (isMounted) {
           setLoading(false)
@@ -392,7 +390,7 @@ function CategoriesPage() {
 
         <Card className="products-kpis__card">
           <span className="kpi-card__label">Unassigned Products</span>
-          <strong className="kpi-card__value small">{defaultUnassignedProducts}</strong>
+          <strong className="kpi-card__value small">0</strong>
         </Card>
       </section>
 

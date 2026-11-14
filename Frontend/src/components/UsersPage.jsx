@@ -5,7 +5,7 @@ import Badge from './ui/Badge'
 import UserDetailsModal from './UserDetailsModal'
 import UserFormModal from './UserFormModal'
 import RoleFormModal from './RoleFormModal'
-import { mockUsers, userRoles, usersStatusOptions, usersRegisterOptions } from '../data/mockUsers'
+import { userRoles, usersStatusOptions, usersRegisterOptions } from '../data/mockUsers'
 import {
   getUsers,
   getRoles,
@@ -15,16 +15,7 @@ import {
   updateStaffStatus,
 } from '../services/api'
 import { PERMISSIONS, usePermission } from '../auth/permissions'
-
-function formatDate(value) {
-  if (!value) return '—'
-
-  return new Intl.DateTimeFormat('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  }).format(new Date(value))
-}
+import { useAuth } from '../context/AuthContext'
 
 function formatDateTime(value) {
   if (!value) return '—'
@@ -39,7 +30,7 @@ function formatDateTime(value) {
 }
 
 function getInitials(name) {
-  return name
+  return String(name || 'User')
     .split(' ')
     .filter(Boolean)
     .slice(0, 2)
@@ -47,27 +38,59 @@ function getInitials(name) {
     .join('')
 }
 
-const USERS_STORAGE_KEY = 'vantrix.staffUsers'
+function isAdminRole(roleName) {
+  const clean = String(roleName || '').trim().toLowerCase()
+  return clean === 'admin' || clean === 'administrator'
+}
+
+function normalizeUserRecord(u) {
+  const roleString =
+    typeof u.role === 'object' && u.role !== null
+      ? u.role.name || 'Staff'
+      : u.roleName || u.role || 'Staff'
+
+  return {
+    id: u.id,
+    name: u.fullName || u.name || 'Staff Member',
+    fullName: u.fullName || u.name || 'Staff Member',
+    email: u.email || '',
+    username: u.username || null,
+    employeeId: u.employeeCode || u.employeeId || '—',
+    employeeCode: u.employeeCode || u.employeeId || '—',
+    role: roleString,
+    roleId: (typeof u.role === 'object' ? u.role?.id : null) ?? u.roleId ?? null,
+    roleCode: (typeof u.role === 'object' ? u.role?.code : null) ?? u.roleCode ?? null,
+    store: u.store || null,
+    storeName: u.storeName || u.store?.name || null,
+    registerAccess: u.registerAccess || (u.allRegisters ? 'All Registers' : 'None'),
+    status: u.status || (u.isActive ? 'Active' : 'Inactive'),
+    isActive: u.isActive !== undefined ? u.isActive : u.status === 'Active',
+    lastLogin: u.lastLogin || null,
+    createdAt: u.createdAt || null,
+  }
+}
+
+const USERS_STORAGE_KEY = 'vantrix.staffUsers.real'
 
 function loadInitialUsers() {
   try {
     const saved = localStorage.getItem(USERS_STORAGE_KEY)
     if (saved) {
       const parsed = JSON.parse(saved)
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        // Ensure all default mockUsers are always kept, with added users on top
-        const parsedIds = new Set(parsed.map((u) => u.id))
-        const missingMocks = mockUsers.filter((m) => !parsedIds.has(m.id))
-        return [...parsed, ...missingMocks]
+      if (Array.isArray(parsed)) {
+        return parsed.map(normalizeUserRecord)
       }
     }
   } catch {
     // Ignore storage parse errors
   }
-  return mockUsers
+  return []
 }
 
 function UsersPage() {
+  const { user: currentUser } = useAuth()
+  const isCurrentUserAdmin =
+    isAdminRole(currentUser?.role) || String(currentUser?.roleCode || '').toUpperCase() === 'ADMIN'
   const canViewUsers = usePermission(PERMISSIONS.USERS_VIEW)
   const canCreateStaff = usePermission(PERMISSIONS.USERS_CREATE) || usePermission(PERMISSIONS.USERS_MANAGE)
   const canUpdateStaff = usePermission(PERMISSIONS.USERS_UPDATE) || usePermission(PERMISSIONS.USERS_MANAGE)
@@ -92,6 +115,8 @@ function UsersPage() {
   const [statusTarget, setStatusTarget] = useState(null)
   const [isConfirmOpen, setIsConfirmOpen] = useState(false)
   const [isTogglingStatus, setIsTogglingStatus] = useState(false)
+  const [promoteTarget, setPromoteTarget] = useState(null)
+  const [isPromoting, setIsPromoting] = useState(false)
 
   // Fetch dynamic roles and users from backend on mount
   useEffect(() => {
@@ -121,40 +146,16 @@ function UsersPage() {
 
         if (usersRes?.ok) {
           const backendUsers = usersRes.data?.data?.users || usersRes.data?.users
-          if (Array.isArray(backendUsers) && backendUsers.length > 0) {
-            setUsers((current) => {
-              const normalized = backendUsers.map((u) => ({
-                id: u.id,
-                name: u.fullName || u.name,
-                fullName: u.fullName || u.name,
-                email: u.email,
-                username: u.username,
-                employeeId: u.employeeCode || u.employeeId || '—',
-                employeeCode: u.employeeCode || u.employeeId || '—',
-                role: typeof u.role === 'object' ? u.role?.name : u.role || 'Staff',
-                roleId: u.role?.id ?? u.roleId,
-                roleCode: u.role?.code ?? u.roleCode,
-                store: u.store,
-                storeName: u.storeName || u.store?.name || null,
-                registerAccess: u.registerAccess || (u.allRegisters ? 'All Registers' : 'None'),
-                status: u.status || (u.isActive ? 'Active' : 'Inactive'),
-                isActive: u.isActive !== undefined ? u.isActive : u.status === 'Active',
-                lastLogin: u.lastLogin,
-                createdAt: u.createdAt,
-              }))
-
-              const backendIds = new Set(normalized.map((u) => u.id))
-              const localOnly = current.filter((u) => !backendIds.has(u.id))
-              const merged = [...normalized, ...localOnly]
-              try {
-                localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(merged))
-              } catch {}
-              return merged
-            })
+          if (Array.isArray(backendUsers)) {
+            const normalized = backendUsers.map(normalizeUserRecord)
+            setUsers(normalized)
+            try {
+              localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(normalized))
+            } catch {}
           }
         } else if (usersRes && !usersRes.ok) {
           if (usersRes.status === 401) {
-            setApiError('Session not authenticated. Displaying cached staff records.')
+            // Silently use cached staff records without alarming banner
           } else if (usersRes.status === 403) {
             setApiError('Missing users.view permission on server.')
           } else {
@@ -162,9 +163,7 @@ function UsersPage() {
           }
         }
       } catch {
-        if (isMounted) {
-          setApiError('Unable to connect to POS backend server. Using local records.')
-        }
+        // Graceful fallback to local records
       } finally {
         if (isMounted) {
           setLoading(false)
@@ -307,12 +306,12 @@ function UsersPage() {
             .then((refreshRes) => {
               if (refreshRes?.ok) {
                 const list = refreshRes.data?.data?.users || refreshRes.data?.users
-                if (Array.isArray(list) && list.length > 0) {
-                  setUsers((curr) => {
-                    const bIds = new Set(list.map((u) => u.id))
-                    const localOnly = curr.filter((u) => !bIds.has(u.id))
-                    return [...list, ...localOnly]
-                  })
+                if (Array.isArray(list)) {
+                  const normalized = list.map(normalizeUserRecord)
+                  setUsers(normalized)
+                  try {
+                    localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(normalized))
+                  } catch {}
                 }
               }
             })
@@ -346,6 +345,8 @@ function UsersPage() {
         fullName: formData.name,
         name: formData.name,
         email: formData.email,
+        username: formData.username || undefined,
+        password: formData.password || undefined,
         employeeCode: formData.employeeId,
         employeeId: formData.employeeId,
         roleId: roleId || 3,
@@ -358,25 +359,7 @@ function UsersPage() {
 
       if (res?.ok && (res.data?.data?.user || res.data?.user)) {
         const createdUser = res.data?.data?.user || res.data?.user
-
-        const formattedNewUser = {
-          id: createdUser.id,
-          name: createdUser.fullName || createdUser.name,
-          fullName: createdUser.fullName || createdUser.name,
-          email: createdUser.email,
-          employeeId: createdUser.employeeCode || createdUser.employeeId || formData.employeeId,
-          employeeCode: createdUser.employeeCode || createdUser.employeeId || formData.employeeId,
-          role: typeof createdUser.role === 'object' ? createdUser.role?.name : createdUser.role || formData.role,
-          roleId: createdUser.role?.id ?? createdUser.roleId ?? roleId,
-          roleCode: createdUser.role?.code ?? createdUser.roleCode,
-          store: createdUser.store,
-          storeName: createdUser.storeName || createdUser.store?.name || null,
-          registerAccess: createdUser.registerAccess || formData.registerAccess,
-          status: createdUser.status || formData.status || 'Active',
-          isActive: createdUser.isActive !== undefined ? createdUser.isActive : true,
-          lastLogin: createdUser.lastLogin || null,
-          createdAt: createdUser.createdAt || new Date().toISOString(),
-        }
+        const formattedNewUser = normalizeUserRecord(createdUser)
 
         setUsers((current) => {
           const updated = [formattedNewUser, ...current.filter((u) => u.id !== formattedNewUser.id)]
@@ -398,12 +381,12 @@ function UsersPage() {
           .then((refreshRes) => {
             if (refreshRes?.ok) {
               const list = refreshRes.data?.data?.users || refreshRes.data?.users
-              if (Array.isArray(list) && list.length > 0) {
-                setUsers((curr) => {
-                  const bIds = new Set(list.map((u) => u.id))
-                  const localOnly = curr.filter((u) => !bIds.has(u.id))
-                  return [...list, ...localOnly]
-                })
+              if (Array.isArray(list)) {
+                const normalized = list.map(normalizeUserRecord)
+                setUsers(normalized)
+                try {
+                  localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(normalized))
+                } catch {}
               }
             }
           })
@@ -416,6 +399,62 @@ function UsersPage() {
       setUserFormError(err.message || 'Error communicating with backend server.')
     } finally {
       setIsSubmittingUser(false)
+    }
+  }
+
+  const openPromoteModal = (targetUser) => {
+    setPromoteTarget(targetUser)
+    setApiError(null)
+  }
+
+  const closePromoteModal = () => {
+    if (isPromoting) return
+    setPromoteTarget(null)
+  }
+
+  const handlePromoteToAdmin = async () => {
+    if (!promoteTarget || isPromoting) return
+
+    setIsPromoting(true)
+    setApiError(null)
+
+    try {
+      const adminRoleObj = rolesList.find((r) => isAdminRole(r.name) || String(r.code).toUpperCase() === 'ADMIN')
+      const targetRoleId = adminRoleObj?.id || 'ADMIN'
+
+      const res = await updateStaffRole(promoteTarget.id, targetRoleId)
+      if (res?.ok) {
+        setUsers((current) => {
+          const updated = current.map((u) =>
+            u.id === promoteTarget.id
+              ? {
+                  ...u,
+                  role: adminRoleObj?.name || 'Admin',
+                  roleId: adminRoleObj?.id || u.roleId,
+                  roleCode: 'ADMIN',
+                }
+              : u
+          )
+          try {
+            localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(updated))
+          } catch {}
+          return updated
+        })
+
+        setSuccessAlert({
+          title: 'Promoted to Administrator!',
+          message: `"${promoteTarget.name}" (${promoteTarget.email}) now has full Administrator privileges.`,
+        })
+        setPromoteTarget(null)
+      } else {
+        setApiError(res?.data?.message || res?.error || 'Failed to promote user to Administrator.')
+        setPromoteTarget(null)
+      }
+    } catch (err) {
+      setApiError(err.message || 'Error communicating with backend server.')
+      setPromoteTarget(null)
+    } finally {
+      setIsPromoting(false)
     }
   }
 
@@ -474,12 +513,12 @@ function UsersPage() {
           .then((refreshRes) => {
             if (refreshRes?.ok) {
               const list = refreshRes.data?.data?.users || refreshRes.data?.users
-              if (Array.isArray(list) && list.length > 0) {
-                setUsers((curr) => {
-                  const bIds = new Set(list.map((u) => u.id))
-                  const localOnly = curr.filter((u) => !bIds.has(u.id))
-                  return [...list, ...localOnly]
-                })
+              if (Array.isArray(list)) {
+                const normalized = list.map(normalizeUserRecord)
+                setUsers(normalized)
+                try {
+                  localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(normalized))
+                } catch {}
               }
             }
           })
@@ -709,69 +748,104 @@ function UsersPage() {
                   </td>
                 </tr>
               ) : (
-                filteredUsers.map((user) => (
-                  <tr key={user.id}>
-                    <td>
-                      <div className="user-cell">
-                        <div className="user-avatar" aria-hidden="true">{getInitials(user.name)}</div>
-                        <div>
-                          <div className="user-cell__name">{user.name}</div>
-                          <div className="user-cell__meta">
-                            <span>{user.email}</span>
-                            {user.storeName && (
-                              <span style={{ marginLeft: '0.4rem', opacity: 0.8 }}>• {user.storeName}</span>
-                            )}
+                filteredUsers.map((user) => {
+                  const isSelf = Boolean(currentUser && String(user.id) === String(currentUser.id))
+                  const userIsAdmin = isAdminRole(user.role)
+                  return (
+                    <tr key={user.id}>
+                      <td>
+                        <div className="user-cell">
+                          <div className="user-avatar" aria-hidden="true">{getInitials(user.name)}</div>
+                          <div>
+                            <div className="user-cell__name">
+                              {user.name}
+                              {isSelf && (
+                                <span
+                                  style={{
+                                    marginLeft: '0.45rem',
+                                    fontSize: '0.72rem',
+                                    padding: '0.1rem 0.4rem',
+                                    borderRadius: '999px',
+                                    background: '#dbeafe',
+                                    color: '#1e40af',
+                                    fontWeight: 600,
+                                  }}
+                                >
+                                  You
+                                </span>
+                              )}
+                            </div>
+                            <div className="user-cell__meta">
+                              <span>{user.email}</span>
+                              {user.storeName && (
+                                <span style={{ marginLeft: '0.4rem', opacity: 0.8 }}>• {user.storeName}</span>
+                              )}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    </td>
-                    <td>{user.employeeId}</td>
-                    <td>
-                      <Badge tone={user.role === 'Administrator' || user.role === 'Admin' ? 'success' : user.role === 'Manager' ? 'warning' : user.role === 'Cashier' ? 'info' : user.role === 'Inventory Clerk' ? 'default' : 'warning'}>{user.role}</Badge>
-                    </td>
-                    <td>{user.registerAccess}</td>
-                    <td>{formatDateTime(user.lastLogin)}</td>
-                    <td>
-                      <Badge tone={user.status === 'Active' ? 'success' : 'warning'}>{user.status}</Badge>
-                    </td>
-                    <td>
-                      <div className="product-row-actions users-actions">
-                        <button type="button" onClick={() => setViewingUser(user)}>View</button>
-                        {canUpdateStaff ? (
-                          <button type="button" onClick={() => openEditModal(user)}>Edit</button>
-                        ) : (
-                          <button
-                            type="button"
-                            disabled
-                            title="Requires users.update permission"
-                            style={{ opacity: 0.5, cursor: 'not-allowed' }}
-                          >
-                            Edit
-                          </button>
-                        )}
-                        {canUpdateStaff ? (
-                          <button
-                            type="button"
-                            className={user.status === 'Active' ? 'danger' : ''}
-                            onClick={() => openStatusConfirm(user.id)}
-                          >
-                            {user.status === 'Active' ? 'Deactivate' : 'Activate'}
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            className={user.status === 'Active' ? 'danger' : ''}
-                            disabled
-                            title="Requires users.update permission"
-                            style={{ opacity: 0.5, cursor: 'not-allowed' }}
-                          >
-                            {user.status === 'Active' ? 'Deactivate' : 'Activate'}
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))
+                      </td>
+                      <td>{user.employeeId}</td>
+                      <td>
+                        <Badge tone={userIsAdmin ? 'success' : user.role === 'Manager' ? 'warning' : user.role === 'Cashier' ? 'info' : user.role === 'Inventory Clerk' ? 'default' : 'warning'}>{user.role}</Badge>
+                      </td>
+                      <td>{user.registerAccess}</td>
+                      <td>{formatDateTime(user.lastLogin)}</td>
+                      <td>
+                        <Badge tone={user.status === 'Active' ? 'success' : 'warning'}>{user.status}</Badge>
+                      </td>
+                      <td>
+                        <div className="product-row-actions users-actions">
+                          <button type="button" onClick={() => setViewingUser(user)}>View</button>
+                          {canUpdateStaff ? (
+                            <button type="button" onClick={() => openEditModal(user)}>Edit</button>
+                          ) : (
+                            <button
+                              type="button"
+                              disabled
+                              title="Requires users.update permission"
+                              style={{ opacity: 0.5, cursor: 'not-allowed' }}
+                            >
+                              Edit
+                            </button>
+                          )}
+                          {isCurrentUserAdmin && !userIsAdmin && user.status === 'Active' && (
+                            <button
+                              type="button"
+                              onClick={() => openPromoteModal(user)}
+                              title="Promote this staff member to Administrator"
+                              style={{ color: '#059669', fontWeight: 600 }}
+                            >
+                              Make Admin
+                            </button>
+                          )}
+                          {canUpdateStaff && !isSelf ? (
+                            <button
+                              type="button"
+                              className={user.status === 'Active' ? 'danger' : ''}
+                              onClick={() => openStatusConfirm(user.id)}
+                            >
+                              {user.status === 'Active' ? 'Deactivate' : 'Activate'}
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              className={user.status === 'Active' ? 'danger' : ''}
+                              disabled
+                              title={
+                                isSelf
+                                  ? 'You cannot deactivate your own account'
+                                  : 'Requires users.update permission'
+                              }
+                              style={{ opacity: 0.5, cursor: 'not-allowed' }}
+                            >
+                              {user.status === 'Active' ? 'Deactivate' : 'Activate'}
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })
               )}
             </tbody>
           </table>
@@ -790,6 +864,8 @@ function UsersPage() {
         isSubmitting={isSubmittingUser}
         externalError={userFormError}
         canAssignRole={canAssignRole}
+        isCurrentUserAdmin={isCurrentUserAdmin}
+        isEditingSelf={Boolean(editingUser && currentUser && String(editingUser.id) === String(currentUser.id))}
       />
 
       <RoleFormModal
@@ -800,6 +876,39 @@ function UsersPage() {
       />
 
       <UserDetailsModal user={viewingUser} onClose={() => setViewingUser(null)} />
+
+      {promoteTarget && (
+        <div className="modal-backdrop" onClick={!isPromoting ? closePromoteModal : undefined}>
+          <div className="confirmation-modal" onClick={(event) => event.stopPropagation()}>
+            <h3>Promote to Administrator</h3>
+            <p>
+              Are you sure you want to promote <strong>{promoteTarget.name}</strong> ({promoteTarget.email}) from{' '}
+              <strong>{promoteTarget.role}</strong> to <strong>Admin</strong>?
+            </p>
+            <p style={{ fontSize: '0.88rem', color: '#4b5563', marginTop: '0.5rem' }}>
+              Administrators have full access to store configuration, inventory, financial reports, and staff role management.
+            </p>
+            <div className="confirmation-modal__actions">
+              <Button
+                variant="secondary"
+                type="button"
+                onClick={closePromoteModal}
+                disabled={isPromoting}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                type="button"
+                onClick={handlePromoteToAdmin}
+                disabled={isPromoting}
+              >
+                {isPromoting ? 'Promoting...' : 'Confirm Promote to Admin'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {isConfirmOpen && (
         <div className="modal-backdrop" onClick={!isTogglingStatus ? closeStatusConfirm : undefined}>

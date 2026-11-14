@@ -107,9 +107,9 @@ export async function GET(request) {
             .from("products")
             .select(`
                 id, store_id, category_id, supplier_id, sku, barcode, name, description,
-                purchase_price, selling_price, tax_rate, reorder_level, unit_of_measure,
+                purchase_price, selling_price, tax_rate, reorder_level,
                 status, created_at, updated_at,
-                category:categories(id, name, code, status),
+                category:categories(id, name, status),
                 supplier:suppliers(id, name, code, status),
                 inventory(current_stock, reserved_stock)
             `, { count: "exact" });
@@ -436,7 +436,6 @@ export async function POST(request) {
             selling_price: sellingPrice,
             tax_rate: taxRate,
             reorder_level: reorderLevel,
-            unit_of_measure: unitOfMeasure,
             status,
         };
 
@@ -445,9 +444,9 @@ export async function POST(request) {
             .insert(insertPayload)
             .select(`
                 id, store_id, category_id, supplier_id, sku, barcode, name, description,
-                purchase_price, selling_price, tax_rate, reorder_level, unit_of_measure,
+                purchase_price, selling_price, tax_rate, reorder_level,
                 status, created_at, updated_at,
-                category:categories(id, name, code, status),
+                category:categories(id, name, status),
                 supplier:suppliers(id, name, code, status),
                 inventory(current_stock, reserved_stock)
             `)
@@ -458,6 +457,15 @@ export async function POST(request) {
                 { success: false, message: `Failed to create product: ${insertError.message}` },
                 { status: 500 }
             );
+        }
+
+        // Set initial stock if provided
+        const initialStock = Number(body.stock ?? body.initialStock ?? 0);
+        if (initialStock > 0 && createdProduct?.id) {
+            await admin
+                .from("inventory")
+                .update({ current_stock: initialStock })
+                .eq("product_id", createdProduct.id);
         }
 
         return Response.json(

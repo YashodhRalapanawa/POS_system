@@ -100,7 +100,7 @@ export async function GET(request) {
         let query = admin
             .from("products")
             .select(`
-                id, store_id, sku, barcode, name, description, unit_of_measure,
+                id, store_id, sku, barcode, name, description,
                 purchase_price, selling_price, reorder_level, status, updated_at,
                 category:categories(id, name),
                 supplier:suppliers(id, name),

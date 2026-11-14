@@ -27,6 +27,8 @@ function formatOrderResponse(order, items = [], customer = null, cashier = null,
     }));
 
     const itemCount = formattedItems.reduce((acc, curr) => acc + curr.quantity, 0);
+    const rawStatus = String(order.status || "Pending").toLowerCase();
+    const normalizedStatus = (rawStatus === "pending" || rawStatus === "held") ? "draft" : rawStatus;
 
     return {
         id: order.id,
@@ -59,9 +61,14 @@ function formatOrderResponse(order, items = [], customer = null, cashier = null,
             username: cash.username || "",
             employeeCode: cash.employee_code || "",
         } : null,
-        status: String(order.status || "draft").toLowerCase(),
-        currencyCode: order.currency_code || order.currency || "USD",
-        currency: order.currency_code || order.currency || "USD",
+        status: normalizedStatus,
+        rawStatus: order.status || "Pending",
+        currencyCode: order.currency_code || order.currency || "LKR",
+        currency: order.currency_code || order.currency || "LKR",
+        discountType: order.discount_type || "none",
+        discountValue: Number(order.discount_value || 0),
+        discountAmount: Number(order.discount_amount || 0),
+        taxAmount: Number(order.tax_amount || 0),
         subtotal: Number(order.subtotal || 0),
         totalAmount: Number(order.total_amount || order.subtotal || 0),
         total: Number(order.total_amount || order.subtotal || 0),
@@ -69,7 +76,7 @@ function formatOrderResponse(order, items = [], customer = null, cashier = null,
         createdAt: order.created_at,
         updatedAt: order.updated_at,
         completedAt: order.completed_at || null,
-        completedBy: order.completed_by || null,
+        completedBy: order.completed_by || order.cashier_user_id || null,
         itemCount,
         items: formattedItems,
     };
@@ -132,49 +139,7 @@ export async function POST(request) {
 
         const storeId = requestedStoreId;
 
-        // Idempotency key from header or body
-        const idempotencyKey = (
-            request.headers.get("idempotency-key") ||
-            body.idempotencyKey ||
-            body.idempotency_key ||
-            ""
-        ).trim() || null;
-
         const admin = getSupabaseAdmin();
-
-        // Check idempotency if key provided
-        if (idempotencyKey) {
-            const { data: existingOrder } = await admin
-                .from("orders")
-                .select(`
-                    id, order_number, store_id, customer_id, cashier_user_id,
-                    status, subtotal, total_amount, notes, created_at, updated_at,
-                    customer:customers (id, name, code, phone, email, is_walk_in),
-                    cashier:users (id, full_name, username, employee_code),
-                    store:stores (id, name, code),
-                    order_items (id, order_id, product_id, product_name, sku, quantity, unit_price, unit_cost, line_total, created_at)
-                `)
-                .eq("store_id", storeId)
-                .eq("idempotency_key", idempotencyKey)
-                .maybeSingle();
-
-            if (existingOrder) {
-                return successResponse(
-                    {
-                        order: formatOrderResponse(
-                            existingOrder,
-                            existingOrder.order_items,
-                            existingOrder.customer,
-                            existingOrder.cashier,
-                            existingOrder.store
-                        ),
-                        isDuplicate: true,
-                    },
-                    "Draft order already saved (idempotent submission)",
-                    200
-                );
-            }
-        }
 
         // Validate items
         const rawItems = Array.isArray(body.items) ? body.items : [];
@@ -274,12 +239,12 @@ export async function POST(request) {
         // Authoritative stock validation for all submitted order items (Task 19)
         const { data: storeSetting } = await admin
             .from("store_settings")
-            .select("allow_negative_stock, currency, currency_code")
+            .select("allow_negative_stock, currency, default_tax_rate, prices_include_tax")
             .eq("store_id", storeId)
             .maybeSingle();
 
         const allowNegativeStock = Boolean(storeSetting?.allow_negative_stock);
-        const storeCurrency = storeSetting?.currency_code || storeSetting?.currency || "USD";
+        const storeCurrency = storeSetting?.currency || "LKR";
 
         // Aggregate quantities across duplicate product lines
         const aggregatedQuantities = new Map();
@@ -349,12 +314,16 @@ export async function POST(request) {
 
         // Authoritative calculation of totals
         let calculatedSubtotal = 0;
+        let calculatedTax = 0;
         const orderItemsToInsert = cleanedItems.map((item) => {
             const prod = productMap.get(item.productId);
             const unitPrice = Math.round(Number(prod.selling_price || 0) * 100) / 100;
             const unitCost = Math.round(Number(prod.purchase_price || 0) * 100) / 100;
             const lineSubtotal = Math.round(item.quantity * unitPrice * 100) / 100;
+            const taxRate = Number(prod.tax_rate || 0);
+            const lineTax = Math.round(lineSubtotal * (taxRate / 100) * 100) / 100;
             calculatedSubtotal += lineSubtotal;
+            calculatedTax += lineTax;
 
             return {
                 store_id: storeId,
@@ -365,86 +334,85 @@ export async function POST(request) {
                 unit_price: unitPrice,
                 unit_cost: unitCost,
                 discount_amount: 0,
-                tax_rate: Number(prod.tax_rate || 0),
-                tax_amount: 0,
+                tax_rate: taxRate,
+                tax_amount: lineTax,
                 line_total: lineSubtotal,
-                updated_at: new Date().toISOString(),
             };
         });
 
         calculatedSubtotal = Math.round(calculatedSubtotal * 100) / 100;
+        calculatedTax = Math.round(calculatedTax * 100) / 100;
+        const rawDiscountType = String(body.discountType || body.discount_type || "").toLowerCase();
+        const discountType = (rawDiscountType === "percentage" || rawDiscountType === "percent")
+            ? "percent"
+            : rawDiscountType === "fixed"
+              ? "fixed"
+              : null;
+        const discountValue = discountType ? Math.max(0, Number(body.discountValue ?? body.discount_value ?? 0) || 0) : 0;
+        let discountAmount = 0;
+        if (discountType === "percent") {
+            discountAmount = Math.round(calculatedSubtotal * (Math.min(100, discountValue) / 100) * 100) / 100;
+        } else if (discountType === "fixed") {
+            discountAmount = Math.min(calculatedSubtotal, Math.round(discountValue * 100) / 100);
+        }
+        const calculatedTotal = Math.max(0, Math.round((calculatedSubtotal - discountAmount + calculatedTax) * 100) / 100);
         const notes = String(body.notes || "").trim();
 
-        // Attempt RPC call for atomic creation
         let createdOrderId = null;
         let createdOrderNumber = null;
 
-        const { data: rpcResult, error: rpcError } = await admin.rpc("create_pos_draft_order", {
+        // Generate order number atomically
+        let generatedNumber = null;
+        const { data: nextNum } = await admin.rpc("next_document_number", {
             p_store_id: storeId,
-            p_cashier_user_id: cashierId,
-            p_customer_id: customerId,
-            p_items: cleanedItems,
-            p_idempotency_key: idempotencyKey,
-            p_notes: notes,
+            p_kind: "order",
         });
-
-        if (!rpcError && rpcResult?.success) {
-            createdOrderId = rpcResult.order_id;
-            createdOrderNumber = rpcResult.order_number;
+        if (nextNum) {
+            generatedNumber = nextNum;
         } else {
-            // Direct atomic insertion fallback if RPC is not present
-            // Generate order number atomically
-            let generatedNumber = null;
-            const { data: nextNum } = await admin.rpc("next_document_number", {
-                p_store_id: storeId,
-                p_kind: "order",
-            });
-            if (nextNum) {
-                generatedNumber = nextNum;
-            } else {
-                generatedNumber = `ORD-${Date.now().toString().slice(-6)}`;
-            }
+            generatedNumber = `ORD-${Date.now().toString().slice(-6)}`;
+        }
 
-            const { data: insertedOrder, error: orderInsertErr } = await admin
-                .from("orders")
-                .insert({
-                    store_id: storeId,
-                    customer_id: customerId,
-                    cashier_user_id: cashierId,
-                    order_number: generatedNumber,
-                    status: "draft",
-                    currency_code: storeCurrency,
-                    currency: storeCurrency,
-                    subtotal: calculatedSubtotal,
-                    total_amount: calculatedSubtotal,
-                    notes,
-                    idempotency_key: idempotencyKey,
-                })
-                .select("id, order_number, currency_code, currency")
-                .single();
+        const { data: insertedOrder, error: orderInsertErr } = await admin
+            .from("orders")
+            .insert({
+                store_id: storeId,
+                customer_id: customerId,
+                cashier_user_id: cashierId,
+                order_number: generatedNumber,
+                status: "Pending",
+                discount_type: discountType,
+                discount_value: discountValue,
+                subtotal: calculatedSubtotal,
+                discount_amount: discountAmount,
+                tax_amount: calculatedTax,
+                total_amount: calculatedTotal,
+                notes,
+            })
+            .select("id, order_number")
+            .single();
 
-            if (orderInsertErr || !insertedOrder) {
-                return errorResponse(`Failed to create order: ${orderInsertErr?.message || "Unknown error"}`, 500);
-            }
+        if (orderInsertErr || !insertedOrder) {
+            return errorResponse(`Failed to create order: ${orderInsertErr?.message || "Unknown error"}`, 500);
+        }
 
-            createdOrderId = insertedOrder.id;
-            createdOrderNumber = insertedOrder.order_number;
+        createdOrderId = insertedOrder.id;
+        createdOrderNumber = insertedOrder.order_number;
 
-            // Insert order items
-            const itemsWithOrderId = orderItemsToInsert.map((item) => ({
-                ...item,
-                order_id: createdOrderId,
-            }));
+        // Insert order items
+        const itemsWithOrderId = orderItemsToInsert.map((item) => ({
+            ...item,
+            order_id: createdOrderId,
+        }));
 
-            const { error: itemsInsertErr } = await admin
-                .from("order_items")
-                .insert(itemsWithOrderId);
+        const { error: itemsInsertErr } = await admin
+            .from("order_items")
+            .insert(itemsWithOrderId);
 
-            if (itemsInsertErr) {
-                // Clean up orphan header if items failed
-                await admin.from("orders").delete().eq("id", createdOrderId);
-                return errorResponse(`Failed to save order items: ${itemsInsertErr.message}`, 500);
-            }
+        if (itemsInsertErr) {
+            // Clean up orphan header if items failed
+            await admin.from("orders").delete().eq("id", createdOrderId);
+            return errorResponse(`Failed to save order items: ${itemsInsertErr.message}`, 500);
         }
 
         // Retrieve full created order to return to frontend
@@ -452,7 +420,7 @@ export async function POST(request) {
             .from("orders")
             .select(`
                 id, order_number, store_id, customer_id, cashier_user_id,
-                status, subtotal, total_amount, notes, created_at, updated_at, completed_at, completed_by,
+                status, discount_type, discount_value, subtotal, discount_amount, tax_amount, total_amount, notes, created_at, updated_at, completed_at,
                 customer:customers (id, name, code, phone, email, is_walk_in),
                 cashier:users (id, full_name, username, employee_code),
                 store:stores (id, name, code),
@@ -460,6 +428,10 @@ export async function POST(request) {
             `)
             .eq("id", createdOrderId)
             .single();
+
+        if (fullOrder) {
+            fullOrder.currency = storeCurrency;
+        }
 
         const formatted = formatOrderResponse(
             fullOrder,
@@ -537,8 +509,7 @@ export async function GET(request) {
             .from("orders")
             .select(`
                 id, order_number, store_id, customer_id, cashier_user_id,
-                currency_code, currency,
-                status, subtotal, total_amount, notes, created_at, updated_at, completed_at, completed_by,
+                status, discount_type, discount_value, subtotal, discount_amount, tax_amount, total_amount, notes, created_at, updated_at, completed_at,
                 customer:customers (id, name, code, phone, email, is_walk_in),
                 cashier:users (id, full_name, username, employee_code),
                 store:stores (id, name, code),
@@ -552,7 +523,12 @@ export async function GET(request) {
 
         // Status filter
         if (statusFilter && statusFilter !== "All Status" && statusFilter !== "All") {
-            query = query.ilike("status", statusFilter);
+            const lowerStatus = statusFilter.toLowerCase();
+            if (lowerStatus === "draft" || lowerStatus === "pending") {
+                query = query.in("status", ["Pending", "Held"]);
+            } else {
+                query = query.ilike("status", statusFilter);
+            }
         }
 
         // Search by order number or notes

@@ -54,15 +54,15 @@ export function CurrencyProvider({ children }) {
     try {
       setIsLoading(true)
       const res = await getCountryCurrencySettings()
-      if (res && res.success) {
-        const data = res.data || res
+      const payload = res?.data?.data || res?.data || res
+      if (res?.ok && (res?.data?.success || payload?.currencyCode)) {
         const resolved = {
-          countryCode: data.countryCode || 'LK',
-          countryName: data.countryName || 'Sri Lanka',
-          currencyCode: data.currencyCode || 'LKR',
-          currencyName: data.currencyName || 'Sri Lankan Rupee',
-          currencySymbol: data.currencySymbol || 'Rs.',
-          updatedAt: data.updatedAt || null,
+          countryCode: payload.countryCode || 'LK',
+          countryName: payload.countryName || 'Sri Lanka',
+          currencyCode: payload.currencyCode || 'LKR',
+          currencyName: payload.currencyName || 'Sri Lankan Rupee',
+          currencySymbol: payload.currencySymbol || 'Rs.',
+          updatedAt: payload.updatedAt || null,
         }
         setCurrencyConfig(resolved)
         try {

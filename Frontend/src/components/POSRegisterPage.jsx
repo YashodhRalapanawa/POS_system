@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import Button from './ui/Button'
 import Card from './ui/Card'
 import Badge from './ui/Badge'
-import { mockCustomers, mockProducts, paymentMethods, keyShortcuts, productCategories } from '../data/mockPOS'
+import { paymentMethods, keyShortcuts } from '../data/mockPOS'
 import { getProducts, getProductByBarcode, getCustomers, createCustomer, createPosOrder, updatePosOrder, getPosOrderById, getStockAvailability, validatePosOrderStock, completePosOrder } from '../services/api'
 import CustomerFormModal from './CustomerFormModal'
 import { PERMISSIONS, usePermission } from '../auth/permissions'
@@ -25,9 +25,9 @@ function POSRegisterPage() {
   const canUpdateDraft = usePermission(PERMISSIONS.POS_ORDERS_UPDATE)
   const canCompleteOrder = usePermission(PERMISSIONS.POS_ORDERS_COMPLETE) || usePermission(PERMISSIONS.POS_USE) || usePermission(PERMISSIONS.ORDERS_VIEW)
 
-  const [products, setProducts] = useState(mockProducts)
-  const [customers, setCustomers] = useState(mockCustomers)
-  const [selectedCustomerId, setSelectedCustomerId] = useState(mockCustomers[0]?.id || '')
+  const [products, setProducts] = useState([])
+  const [customers, setCustomers] = useState([])
+  const [selectedCustomerId, setSelectedCustomerId] = useState('')
   const [search, setSearch] = useState('')
   const [selectedCategory, setSelectedCategory] = useState('All')
   const [cart, setCart] = useState(initialCart)
@@ -49,6 +49,11 @@ function POSRegisterPage() {
   const [isCompletingOrder, setIsCompletingOrder] = useState(false)
   const [completionError, setCompletionError] = useState(null)
 
+  const availableCategories = useMemo(() => {
+    const cats = Array.from(new Set(products.map((p) => p.category).filter(Boolean)))
+    return ['All', ...cats]
+  }, [products])
+
   const showPosNotification = (message, tone = 'success') => {
     setPosNotification({ message, tone })
     setTimeout(() => {
@@ -65,45 +70,40 @@ function POSRegisterPage() {
         if (!isMounted) return
         if (res?.ok && res.data?.success) {
           const list = res.data.data?.products || []
-          if (Array.isArray(list) && list.length > 0) {
-            const activeList = list
-              .filter((p) => p.status !== 'Inactive' && p.isActive !== false)
-              .map((p) => ({
-                id: p.id,
-                name: p.name,
-                sku: p.sku,
-                barcode: p.barcode || '',
-                price: Number(p.sellingPrice ?? 0),
-                stock: p.stock ?? 0,
-                taxRate: (Number(p.taxRate ?? 15)) / 100,
-                category: p.category || 'General',
-              }))
-            if (activeList.length > 0) {
-              setProducts(activeList)
-            }
-          }
+          const activeList = list
+            .filter((p) => p.status !== 'Inactive' && p.isActive !== false)
+            .map((p) => ({
+              id: p.id,
+              name: p.name,
+              sku: p.sku,
+              barcode: p.barcode || '',
+              price: Number(p.sellingPrice ?? 0),
+              stock: p.stock ?? 0,
+              taxRate: (Number(p.taxRate ?? 15)) / 100,
+              category: p.category || 'General',
+            }))
+          setProducts(activeList)
+        } else {
+          setProducts([])
         }
       })
-      .catch(() => {})
+      .catch(() => {
+        if (isMounted) setProducts([])
+      })
 
     // Fetch active customers from Supabase GET /api/customers
     getCustomers({ status: 'Active', all: true })
       .then((res) => {
         if (!isMounted) return
         if (res?.ok) {
-          const list = res.data?.data?.customers || res.data?.customers
-          if (Array.isArray(list) && list.length > 0) {
-            const activeCustomers = list.filter((c) => c.status !== 'Inactive' && c.isActive !== false)
-            if (activeCustomers.length > 0) {
-              setCustomers(activeCustomers)
-              // Prioritize Walk-in Customer by default
-              const walkIn = activeCustomers.find((c) => c.isWalkIn || c.code === 'CUS-001')
-              if (walkIn) {
-                setSelectedCustomerId(walkIn.id)
-              } else {
-                setSelectedCustomerId(activeCustomers[0].id)
-              }
-            }
+          const list = res.data?.data?.customers || res.data?.customers || []
+          const activeCustomers = list.filter((c) => c.status !== 'Inactive' && c.isActive !== false)
+          setCustomers(activeCustomers)
+          const walkIn = activeCustomers.find((c) => c.isWalkIn || c.code === 'CUS-001')
+          if (walkIn) {
+            setSelectedCustomerId(walkIn.id)
+          } else if (activeCustomers.length > 0) {
+            setSelectedCustomerId(activeCustomers[0].id)
           }
         }
       })
@@ -506,6 +506,8 @@ function POSRegisterPage() {
     const payload = {
       customerId: selectedCustomerId || null,
       storeId: user?.storeId || null,
+      discountType,
+      discountValue: Number(discountValue || 0),
       items: cart.map((item) => ({
         productId: item.id,
         quantity: item.quantity,
@@ -534,10 +536,10 @@ function POSRegisterPage() {
         setEditingOrderNumber(created.orderNumber)
         setShowCompleteConfirmModal(true)
       } else {
-        showPosNotification(res?.data?.message || 'Failed to save draft order for completion.', 'danger')
+        showPosNotification(res?.data?.message || res?.error || 'Failed to save draft order for completion.', 'danger')
       }
     } catch (err) {
-      showPosNotification(err.message || 'Error communicating with server.', 'danger')
+      showPosNotification(err?.message || 'Error communicating with server while preparing order.', 'danger')
     } finally {
       setIsSavingDraft(false)
     }
@@ -549,7 +551,8 @@ function POSRegisterPage() {
     setCart([])
     setSelectedCategory('All')
     setSearch('')
-    setSelectedCustomerId(mockCustomers[0].id)
+    const defaultCust = customers.find((c) => c.isWalkIn) || customers[0]
+    setSelectedCustomerId(defaultCust ? defaultCust.id : '')
     setDiscountType('percent')
     setDiscountValue('10')
     setPaymentMethod('Cash')
@@ -622,6 +625,8 @@ function POSRegisterPage() {
     const payload = {
       customerId: selectedCustomerId || null,
       storeId: user?.storeId || null,
+      discountType,
+      discountValue: Number(discountValue || 0),
       items: cart.map((item) => ({
         productId: item.id,
         quantity: item.quantity,
@@ -700,13 +705,6 @@ function POSRegisterPage() {
         } else {
           const msg = res?.data?.message || res?.error || 'Failed to save draft order.'
           showPosNotification(msg, 'danger')
-          if (res?.data?.items) {
-            const errMap = {}
-            res.data.items.filter((it) => !it.valid).forEach((it) => {
-              errMap[it.productId] = it.message
-            })
-            setItemValidationErrors(errMap)
-          }
         }
       }
     } catch (err) {
@@ -762,11 +760,18 @@ function POSRegisterPage() {
     setCompletionError(null)
 
     try {
-      const res = await completePosOrder(editingOrderId)
+      const res = await completePosOrder(editingOrderId, {
+        paymentMethod,
+        tenderedAmount: Number(cashTendered) || total,
+        discountType,
+        discountValue: Number(discountValue || 0),
+      })
       if (res?.ok && res.data?.success) {
         const completed = res.data.data?.order || res.data.data
+        const createdInv = res.data.data?.invoice
         const completedNum = completed?.orderNumber || editingOrderNumber
-        showPosNotification(`Order #${completedNum} completed successfully! Stock deducted.`, 'success')
+        const invText = createdInv?.invoice_number ? ` Invoice #${createdInv.invoice_number} generated.` : ''
+        showPosNotification(`Order #${completedNum} completed successfully!${invText} Stock deducted.`, 'success')
         setShowCompleteConfirmModal(false)
         setEditingOrderId(null)
         setEditingOrderNumber(null)
@@ -797,8 +802,9 @@ function POSRegisterPage() {
         showPosNotification(`Order completion failed: ${msg}`, 'danger')
       }
     } catch (err) {
-      setCompletionError(err.message || 'Error communicating with server.')
-      showPosNotification(err.message || 'Error communicating with server.', 'danger')
+      const msg = err?.message || 'Error communicating with server.'
+      setCompletionError(msg)
+      showPosNotification(`Order completion failed: ${msg}`, 'danger')
     } finally {
       setIsCompletingOrder(false)
     }
@@ -1295,7 +1301,7 @@ function POSRegisterPage() {
             )}
 
             <div className="pos-categories" aria-label="Product categories">
-              {productCategories.map((category) => (
+              {availableCategories.map((category) => (
                 <button
                   key={category}
                   type="button"
@@ -1309,51 +1315,69 @@ function POSRegisterPage() {
           </section>
 
           <section className="pos-product-grid" aria-label="Products">
-            {visibleProducts.map((product) => {
-              const avail = stockAvailability[product.id]?.availableQuantity !== undefined
-                ? stockAvailability[product.id].availableQuantity
-                : product.stock
-              const isLow = typeof avail === 'number' && avail > 0 && avail < 5
-              const isOut = typeof avail === 'number' && avail <= 0
+            {visibleProducts.length === 0 ? (
+              <div style={{
+                gridColumn: '1 / -1',
+                padding: '3rem 1.5rem',
+                textAlign: 'center',
+                background: '#f8fafc',
+                borderRadius: '12px',
+                border: '1px dashed #cbd5e1',
+                color: '#64748b',
+              }}>
+                <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>📦</div>
+                <strong style={{ display: 'block', fontSize: '1rem', color: '#1e293b', marginBottom: '0.25rem' }}>
+                  No products available
+                </strong>
+                <span>Add products in Catalog &gt; Products to make them available for sales.</span>
+              </div>
+            ) : (
+              visibleProducts.map((product) => {
+                const avail = stockAvailability[product.id]?.availableQuantity !== undefined
+                  ? stockAvailability[product.id].availableQuantity
+                  : product.stock
+                const isLow = typeof avail === 'number' && avail > 0 && avail < 5
+                const isOut = typeof avail === 'number' && avail <= 0
 
-              return (
-                <button
-                  key={product.id}
-                  type="button"
-                  className="pos-product-item"
-                  onClick={() => addToCart(product)}
-                >
-                  <span className="pos-product-item__name">{product.name}</span>
-                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center', margin: '2px 0 4px', flexWrap: 'wrap' }}>
-                    <span style={{
-                      fontSize: '0.62rem',
-                      fontWeight: 700,
-                      textTransform: 'uppercase',
-                      padding: '2px 6px',
-                      borderRadius: '4px',
-                      background: '#f1f5f9',
-                      color: '#475569',
-                    }}>
-                      {product.category || 'General'}
+                return (
+                  <button
+                    key={product.id}
+                    type="button"
+                    className="pos-product-item"
+                    onClick={() => addToCart(product)}
+                  >
+                    <span className="pos-product-item__name">{product.name}</span>
+                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center', margin: '2px 0 4px', flexWrap: 'wrap' }}>
+                      <span style={{
+                        fontSize: '0.62rem',
+                        fontWeight: 700,
+                        textTransform: 'uppercase',
+                        padding: '2px 6px',
+                        borderRadius: '4px',
+                        background: '#f1f5f9',
+                        color: '#475569',
+                      }}>
+                        {product.category || 'General'}
+                      </span>
+                      <span className="pos-product-item__sku">{product.sku}</span>
+                    </div>
+                    <span className="pos-product-item__meta">
+                      <strong>{formatCurrency(product.price)}</strong>
+                      <small style={{
+                        background: isOut ? '#fef2f2' : isLow ? '#fffbeb' : '#ecfdf5',
+                        color: isOut ? '#b91c1c' : isLow ? '#b45309' : '#047857',
+                        border: `1px solid ${isOut ? '#fecaca' : isLow ? '#fde68a' : '#a7f3d0'}`,
+                        borderRadius: '6px',
+                        padding: '2px 7px',
+                        fontWeight: 700,
+                      }}>
+                        {avail !== undefined && avail !== Infinity ? `${avail} in stock` : `${product.stock} in stock`}
+                      </small>
                     </span>
-                    <span className="pos-product-item__sku">{product.sku}</span>
-                  </div>
-                  <span className="pos-product-item__meta">
-                    <strong>{formatCurrency(product.price)}</strong>
-                    <small style={{
-                      background: isOut ? '#fef2f2' : isLow ? '#fffbeb' : '#ecfdf5',
-                      color: isOut ? '#b91c1c' : isLow ? '#b45309' : '#047857',
-                      border: `1px solid ${isOut ? '#fecaca' : isLow ? '#fde68a' : '#a7f3d0'}`,
-                      borderRadius: '6px',
-                      padding: '2px 7px',
-                      fontWeight: 700,
-                    }}>
-                      {avail !== undefined && avail !== Infinity ? `${avail} in stock` : `${product.stock} in stock`}
-                    </small>
-                  </span>
-                </button>
-              )
-            })}
+                  </button>
+                )
+              })
+            )}
           </section>
         </main>
 

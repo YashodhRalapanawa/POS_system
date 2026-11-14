@@ -54,7 +54,7 @@ export async function PATCH(request, context) {
         // 1. Fetch current category record
         const { data: currentCategory, error: fetchErr } = await admin
             .from("categories")
-            .select("id, store_id, name, code, description, status, created_at, updated_at")
+            .select("id, store_id, name, description, status, created_at, updated_at")
             .eq("id", categoryId)
             .maybeSingle();
 

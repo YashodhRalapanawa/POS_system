@@ -1,19 +1,15 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import Button from './ui/Button'
 import Card from './ui/Card'
 import Badge from './ui/Badge'
 import InvoiceDetailsModal from './InvoiceDetailsModal'
 import InvoicePreviewModal from './InvoicePreviewModal'
-import { initialInvoices, invoiceStatusOptions, paymentMethodOptions, dateFilterOptions, customerTypeOptions } from '../data/mockInvoices'
+import ExportInvoicesModal from './ExportInvoicesModal'
+import { invoiceStatusOptions, paymentMethodOptions, dateFilterOptions, customerTypeOptions } from '../data/mockInvoices'
+import { getInvoices, createPayment, updateInvoice } from '../services/api'
+import { useCurrency } from '../context/CurrencyContext'
 import { paths } from '../routes'
-
-function formatCurrency(value) {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-  }).format(value)
-}
 
 function formatDate(value) {
   if (!value) return '—'
@@ -27,7 +23,9 @@ function formatDate(value) {
 
 function InvoicesPage() {
   const navigate = useNavigate()
-  const [invoices, setInvoices] = useState(initialInvoices)
+  const { formatCurrency } = useCurrency()
+  const [invoices, setInvoices] = useState([])
+  const [isLoading, setIsLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('All Status')
   const [paymentFilter, setPaymentFilter] = useState('All Payment Methods')
@@ -37,6 +35,32 @@ function InvoicesPage() {
   const [previewInvoiceId, setPreviewInvoiceId] = useState(null)
   const [moreInvoiceId, setMoreInvoiceId] = useState(null)
   const [showExportMessage, setShowExportMessage] = useState(false)
+
+  useEffect(() => {
+    let isMounted = true
+    setIsLoading(true)
+
+    getInvoices({ all: true })
+      .then((res) => {
+        if (!isMounted) return
+        if (res?.ok && res.data?.success) {
+          const list = res.data.data?.invoices || res.data.invoices || []
+          setInvoices(list)
+        } else {
+          setInvoices([])
+        }
+      })
+      .catch(() => {
+        if (isMounted) setInvoices([])
+      })
+      .finally(() => {
+        if (isMounted) setIsLoading(false)
+      })
+
+    return () => {
+      isMounted = false
+    }
+  }, [])
 
   const filteredInvoices = useMemo(() => {
     return invoices.filter((invoice) => {
@@ -86,18 +110,38 @@ function InvoicesPage() {
     return 'warning'
   }
 
-  const handleMarkInvoicePaid = (invoiceId) => {
-    setInvoices((currentInvoices) =>
-      currentInvoices.map((invoice) => {
-        if (invoice.id !== invoiceId) return invoice
+  const handleMarkInvoicePaid = async (invoiceId) => {
+    try {
+      const payRes = await createPayment({
+        invoiceId,
+        method: 'Cash',
+        status: 'Completed',
+      })
+      if (payRes?.ok && payRes.data?.success) {
+        const updatedInv = payRes.data.data?.invoice || payRes.data.invoice
+        setInvoices((currentInvoices) =>
+          currentInvoices.map((invoice) => {
+            if (invoice.id !== invoiceId) return invoice
+            return updatedInv || { ...invoice, status: 'Paid', paymentStatus: 'Paid' }
+          }),
+        )
+        setMoreInvoiceId(null)
+        return
+      }
 
-        return {
-          ...invoice,
-          status: 'Paid',
-          paymentStatus: 'Paid',
-        }
-      }),
-    )
+      const updRes = await updateInvoice(invoiceId, { status: 'Paid' })
+      if (updRes?.ok && updRes.data?.success) {
+        const updatedInv = updRes.data.data?.invoice || updRes.data.invoice
+        setInvoices((currentInvoices) =>
+          currentInvoices.map((invoice) => {
+            if (invoice.id !== invoiceId) return invoice
+            return updatedInv || { ...invoice, status: 'Paid', paymentStatus: 'Paid' }
+          }),
+        )
+      }
+    } catch {
+      // ignore
+    }
     setMoreInvoiceId(null)
   }
 
@@ -204,7 +248,13 @@ function InvoicesPage() {
             </thead>
 
             <tbody>
-              {filteredInvoices.length === 0 ? (
+              {isLoading ? (
+                <tr>
+                  <td colSpan="9" style={{ textAlign: 'center', padding: '2.5rem' }}>
+                    Loading invoices...
+                  </td>
+                </tr>
+              ) : filteredInvoices.length === 0 ? (
                 <tr>
                   <td colSpan="9">
                     <div className="inventory-empty-state">
@@ -250,15 +300,18 @@ function InvoicesPage() {
       </Card>
 
       {showExportMessage && (
-        <div className="modal-backdrop" onClick={() => setShowExportMessage(false)}>
-          <div className="confirmation-modal" onClick={(event) => event.stopPropagation()}>
-            <h3>Export Invoice Report</h3>
-            <p>Invoice export is available when backend reporting is connected.</p>
-            <div className="confirmation-modal__actions">
-              <Button variant="primary" type="button" onClick={() => setShowExportMessage(false)}>Close</Button>
-            </div>
-          </div>
-        </div>
+        <ExportInvoicesModal
+          invoices={invoices}
+          activeFilters={{
+            filteredInvoices,
+            search,
+            statusFilter,
+            paymentFilter,
+            dateFilter,
+            customerTypeFilter,
+          }}
+          onClose={() => setShowExportMessage(false)}
+        />
       )}
 
       <InvoiceDetailsModal invoice={selectedInvoice} onClose={() => setSelectedInvoiceId(null)} />

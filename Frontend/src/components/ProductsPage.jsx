@@ -6,7 +6,7 @@ import ProductFormModal from './ProductFormModal'
 import ProductDetailsModal from './ProductDetailsModal'
 import ProductImportModal from './ProductImportModal'
 import ProductAdvancedFiltersModal from './ProductAdvancedFiltersModal'
-import { initialProducts, productCategories, stockStatusOptions } from '../data/mockProducts'
+import { stockStatusOptions } from '../data/mockProducts'
 import {
   getCategories,
   getSuppliers,
@@ -82,11 +82,14 @@ function ProductsPage() {
         const fetched = res.data.data?.products || []
         setProducts(fetched)
       } else {
-        // Fallback to initialProducts if backend offline
-        setProducts(initialProducts)
+        setProducts([])
+        if (res && !res.ok && res.status !== 401) {
+          setApiError(res.data?.message || 'Failed to fetch products from server.')
+        }
       }
     } catch (err) {
-      setProducts(initialProducts)
+      setProducts([])
+      setApiError('Network error while connecting to products server.')
     } finally {
       setIsLoading(false)
     }
@@ -132,8 +135,7 @@ function ProductsPage() {
 
   const categoryFilterOptions = useMemo(() => {
     const apiNames = availableCategories.map((c) => c.name)
-    const combined = Array.from(new Set([...apiNames, ...productCategories.filter((c) => c !== 'All Categories')]))
-    return ['All Categories', ...combined]
+    return ['All Categories', ...apiNames]
   }, [availableCategories])
 
   const supplierFilterOptions = useMemo(() => {

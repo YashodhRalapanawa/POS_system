@@ -49,10 +49,10 @@ export async function PATCH(request, context) {
             );
         }
 
-        const { valid: isRoleValid, roleId, error: roleErrorMsg } = parseRoleId(body?.roleId);
-        if (!isRoleValid) {
+        const rawRoleId = body?.roleId ?? body?.role;
+        if (rawRoleId === undefined || rawRoleId === null || String(rawRoleId).trim() === "") {
             return Response.json(
-                { success: false, message: roleErrorMsg },
+                { success: false, message: "Missing roleId." },
                 { status: 400 }
             );
         }
@@ -71,7 +71,7 @@ export async function PATCH(request, context) {
             .from("users")
             .select(`
                 id, full_name, email, username, employee_code, store_id, status, role_id,
-                currentRole:roles (id, name, code)
+                currentRole:roles (id, name)
             `)
             .eq("id", targetUserId)
             .maybeSingle();
@@ -90,12 +90,21 @@ export async function PATCH(request, context) {
             );
         }
 
-        // 2. Verify new role exists and is active
-        const { data: targetRole, error: targetRoleError } = await admin
-            .from("roles")
-            .select("id, name, code, is_system, is_active")
-            .eq("id", roleId)
-            .maybeSingle();
+        // 2. Verify new role exists
+        const parsedInt = Number(rawRoleId);
+        let roleQuery = admin.from("roles").select("id, name");
+        if (Number.isInteger(parsedInt) && parsedInt > 0) {
+            roleQuery = roleQuery.eq("id", parsedInt);
+        } else {
+            const cleanName = String(rawRoleId).trim();
+            const normalizedName =
+                cleanName.toUpperCase() === "ADMIN" || cleanName.toUpperCase() === "ADMINISTRATOR"
+                    ? "Admin"
+                    : cleanName;
+            roleQuery = roleQuery.ilike("name", normalizedName);
+        }
+
+        const { data: targetRole, error: targetRoleError } = await roleQuery.maybeSingle();
 
         if (targetRoleError) {
             return Response.json(
@@ -111,32 +120,51 @@ export async function PATCH(request, context) {
             );
         }
 
-        if (targetRole.is_active === false) {
+        const roleId = targetRole.id;
+
+        // 3. Security & Self-Protection:
+        const currentRoleName = targetUser.currentRole?.name || "";
+        const isCurrentlyAdmin =
+            currentRoleName.toLowerCase() === "admin" ||
+            currentRoleName.toLowerCase() === "administrator";
+
+        const newRoleName = targetRole.name || "";
+        const isNewRoleAdmin =
+            newRoleName.toLowerCase() === "admin" ||
+            newRoleName.toLowerCase() === "administrator";
+
+        // A. Only an existing Administrator can promote any user to Admin
+        if (isNewRoleAdmin) {
+            const callerRole = String(auth.user.role?.name || auth.user.role || "").toUpperCase();
+            if (callerRole !== "ADMIN" && callerRole !== "ADMINISTRATOR") {
+                return Response.json(
+                    {
+                        success: false,
+                        message: "Only an Administrator can promote a staff member to the Administrator role.",
+                    },
+                    { status: 403 }
+                );
+            }
+        }
+
+        // B. An Administrator cannot demote their own account
+        if (String(targetUserId) === String(auth.user.id) && isCurrentlyAdmin && !isNewRoleAdmin) {
             return Response.json(
-                { success: false, message: "Cannot assign an inactive role." },
+                {
+                    success: false,
+                    message: "Administrators cannot demote their own account. Another Administrator must update your role.",
+                },
                 { status: 400 }
             );
         }
 
-        // 3. System Self-Protection: Prevent demoting the last active Administrator
-        const currentRoleName = targetUser.currentRole?.name || "";
-        const currentRoleCode = targetUser.currentRole?.code || "";
-        const isCurrentlyAdmin =
-            currentRoleName.toLowerCase() === "admin" ||
-            currentRoleCode.toUpperCase() === "ADMIN";
-
-        const newRoleName = targetRole.name || "";
-        const newRoleCode = targetRole.code || "";
-        const isNewRoleAdmin =
-            newRoleName.toLowerCase() === "admin" ||
-            newRoleCode.toUpperCase() === "ADMIN";
-
+        // C. Prevent demoting the last active Administrator in the system
         if (isCurrentlyAdmin && !isNewRoleAdmin) {
             // Count remaining active administrators in the system
             const { data: adminRoles } = await admin
                 .from("roles")
                 .select("id")
-                .or("name.eq.Admin,code.eq.ADMIN");
+                .ilike("name", "Admin");
 
             const adminRoleIds = (adminRoles || []).map((r) => r.id);
 
@@ -157,43 +185,20 @@ export async function PATCH(request, context) {
             }
         }
 
-        // 4. Atomic execution via RPC (with direct update fallback)
-        let rpcExecuted = false;
-        try {
-            const { data: rpcResult, error: rpcError } = await admin.rpc("update_staff_role", {
-                p_user_id: targetUserId,
-                p_role_id: roleId,
-            });
+        // 4. Execute direct role update in public.users
+        const { error: updateError } = await admin
+            .from("users")
+            .update({
+                role_id: roleId,
+                updated_at: new Date().toISOString(),
+            })
+            .eq("id", targetUserId);
 
-            if (!rpcError && rpcResult) {
-                rpcExecuted = true;
-                if (!rpcResult.success) {
-                    const status = rpcResult.error_code === "USER_NOT_FOUND" || rpcResult.error_code === "ROLE_NOT_FOUND" ? 404 : 400;
-                    return Response.json(
-                        { success: false, message: rpcResult.message },
-                        { status }
-                    );
-                }
-            }
-        } catch {
-            // Silently fall back to direct update if RPC is not installed yet
-        }
-
-        if (!rpcExecuted) {
-            const { error: updateError } = await admin
-                .from("users")
-                .update({
-                    role_id: roleId,
-                    updated_at: new Date().toISOString(),
-                })
-                .eq("id", targetUserId);
-
-            if (updateError) {
-                return Response.json(
-                    { success: false, message: "Failed to update staff role." },
-                    { status: 500 }
-                );
-            }
+        if (updateError) {
+            return Response.json(
+                { success: false, message: `Failed to update staff role: ${updateError.message}` },
+                { status: 500 }
+            );
         }
 
         // 5. Optional Activity Audit Log

@@ -1,16 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
-import { initialOrders } from '../data/mockOrders'
+import { useEffect, useState } from 'react'
+import { getPosOrders } from '../services/api'
+import { useCurrency } from '../context/CurrencyContext'
 import Button from './ui/Button'
 
 const returnReasonOptions = ['Damaged', 'Defective', 'Wrong Item', 'Customer Changed Mind', 'Incorrect Quantity', 'Other']
 const refundMethodOptions = ['Original Payment', 'Cash', 'Card', 'Store Credit']
-
-function formatCurrency(value) {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-  }).format(value)
-}
 
 function formatDate(value) {
   if (!value) return '—'
@@ -24,14 +18,16 @@ function formatDate(value) {
 
 function getDraftRefundSummary(selectedItems) {
   const subtotal = selectedItems.reduce((total, item) => total + Number(item.unitPrice) * Number(item.returnQty), 0)
-  const tax = selectedItems.reduce((total, item) => total + ((Number(item.unitPrice) * Number(item.returnQty)) * (Number(item.taxRate || 8) / 100)), 0)
+  const tax = selectedItems.reduce((total, item) => total + ((Number(item.unitPrice) * Number(item.returnQty)) * (Number(item.taxRate || 0) / 100)), 0)
   const refundAmount = subtotal + tax
 
   return { subtotal, tax, refundAmount }
 }
 
 function NewReturnModal({ isOpen, onClose, onCreate }) {
+  const { formatCurrency } = useCurrency()
   const [orderIdInput, setOrderIdInput] = useState('')
+  const [isSearchingOrder, setIsSearchingOrder] = useState(false)
   const [selectedOrder, setSelectedOrder] = useState(null)
   const [reason, setReason] = useState('')
   const [notes, setNotes] = useState('')
@@ -42,6 +38,7 @@ function NewReturnModal({ isOpen, onClose, onCreate }) {
   useEffect(() => {
     if (!isOpen) {
       setOrderIdInput('')
+      setIsSearchingOrder(false)
       setSelectedOrder(null)
       setReason('')
       setNotes('')
@@ -53,35 +50,59 @@ function NewReturnModal({ isOpen, onClose, onCreate }) {
 
   if (!isOpen) return null
 
-  const handleFindOrder = () => {
-    const normalized = orderIdInput.trim().toUpperCase()
+  const handleFindOrder = async () => {
+    const normalized = orderIdInput.trim()
     if (!normalized) {
       setSelectedOrder(null)
-      setValidationError('Please enter an order ID to find the original sale.')
+      setValidationError('Please enter an order ID or order number (e.g. ORD-1001) to find the original sale.')
       return
     }
 
-    const order = initialOrders.find((entry) => entry.id.toUpperCase() === normalized)
-
-    if (!order) {
-      setSelectedOrder(null)
-      setValidationError('No matching order was found in the mock POS data.')
-      return
-    }
-
-    setSelectedOrder(order)
-    setSelectedItems(
-      order.items.map((item, index) => ({
-        id: `${order.id}-${item.name}-${index}`,
-        name: item.name,
-        sku: `${item.name.toUpperCase().replace(/\s+/g, '-')}-SKU`,
-        purchasedQty: item.quantity,
-        returnQty: 0,
-        unitPrice: item.unitPrice,
-        taxRate: 8,
-      })),
-    )
+    setIsSearchingOrder(true)
     setValidationError('')
+
+    try {
+      const res = await getPosOrders({ search: normalized, limit: 25 })
+      const ordersList = res?.data?.data?.orders || res?.data?.orders || []
+      const upper = normalized.toUpperCase().replace(/^#/, '')
+      const order =
+        ordersList.find(
+          (entry) =>
+            String(entry.orderNumber || '').toUpperCase() === upper ||
+            String(entry.id || '').toUpperCase() === upper,
+        ) || ordersList[0]
+
+      if (!order) {
+        setSelectedOrder(null)
+        setValidationError(`No matching order found for "${normalized}".`)
+        return
+      }
+
+      setSelectedOrder({
+        ...order,
+        paymentMethod: order.paymentMethod || 'Cash',
+        total: Number(order.totalAmount ?? order.total ?? order.subtotal ?? 0),
+      })
+      setSelectedItems(
+        (order.items || []).map((item, index) => ({
+          id: item.id || `${order.id}-${item.productId || index}`,
+          orderItemId: item.id,
+          productId: item.productId,
+          name: item.productName || item.name || 'Item',
+          sku: item.sku || '',
+          purchasedQty: Number(item.quantity || 1),
+          returnQty: 0,
+          unitPrice: Number(item.unitPrice || 0),
+          taxRate: Number(item.taxRate ?? 15),
+        })),
+      )
+      setValidationError('')
+    } catch {
+      setSelectedOrder(null)
+      setValidationError('Failed to search orders from the server.')
+    } finally {
+      setIsSearchingOrder(false)
+    }
   }
 
   const handleItemQtyChange = (itemId, value) => {
@@ -135,9 +156,10 @@ function NewReturnModal({ isOpen, onClose, onCreate }) {
     }
 
     const returnPayload = {
-      orderId: selectedOrder.id,
+      orderId: selectedOrder.id || selectedOrder.orderNumber,
+      orderNumber: selectedOrder.orderNumber || selectedOrder.id,
       customerName: selectedOrder.customerName,
-      customerCode: selectedOrder.customerId ? selectedOrder.customerId.toUpperCase() : 'CUS-001',
+      customerCode: selectedOrder.customerCode || 'CUS-001',
       createdAt: new Date().toISOString(),
       status: 'Pending',
       refundMethod,
@@ -147,6 +169,8 @@ function NewReturnModal({ isOpen, onClose, onCreate }) {
       tax: refundPreview.tax,
       refundAmount: refundPreview.refundAmount,
       items: selectedReturnItems.map((item) => ({
+        orderItemId: item.orderItemId || item.id,
+        productId: item.productId,
         name: item.name,
         sku: item.sku,
         quantity: item.returnQty,

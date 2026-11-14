@@ -24,8 +24,15 @@ async function resolveLoginEmail(identifier) {
     try {
         const admin = getSupabaseAdmin();
         const { data, error } = await admin.rpc("get_login_email", { p_identifier: identifier });
-        if (error) return null;
-        return data || null;
+        if (!error && data) {
+            return data;
+        }
+        const { data: userRow } = await admin
+            .from("users")
+            .select("email")
+            .ilike("username", identifier)
+            .maybeSingle();
+        return userRow?.email ? userRow.email.toLowerCase() : null;
     } catch {
         return null;
     }

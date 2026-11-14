@@ -1,11 +1,5 @@
 import Button from './ui/Button'
-
-function formatCurrency(value) {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-  }).format(value)
-}
+import { useCurrency } from '../context/CurrencyContext'
 
 function formatDate(value) {
   if (!value) return '—'
@@ -18,6 +12,7 @@ function formatDate(value) {
 }
 
 function InvoicePreviewModal({ invoice, order, onClose }) {
+  const { formatCurrency } = useCurrency()
   const activeInvoice = invoice ?? order ?? null
 
   if (!activeInvoice) return null
@@ -39,9 +34,157 @@ function InvoicePreviewModal({ invoice, order, onClose }) {
   const items = activeInvoice.items ?? []
 
   const handlePrintPreview = () => {
-    if (typeof window !== 'undefined') {
-      window.alert('Print preview is available when the reporting layer is connected.')
+    const printWindow = window.open('', '_blank', 'width=900,height=800')
+    if (!printWindow) {
+      alert('Pop-up blocked. Please allow pop-ups for this site to print invoice.')
+      return
     }
+
+    const itemsRows = items.map((it) => `
+      <tr>
+        <td style="padding: 10px 12px; border-bottom: 1px solid #e2e8f0; font-size: 13px; color: #1e293b;">
+          <strong>${it.name || it.productName || 'Item'}</strong>
+          ${it.sku ? `<div style="font-size: 11px; color: #64748b;">SKU: ${it.sku}</div>` : ''}
+        </td>
+        <td style="padding: 10px 12px; border-bottom: 1px solid #e2e8f0; text-align: center; font-size: 13px;">${it.quantity}</td>
+        <td style="padding: 10px 12px; border-bottom: 1px solid #e2e8f0; text-align: right; font-size: 13px;">${formatCurrency(it.unitPrice)}</td>
+        <td style="padding: 10px 12px; border-bottom: 1px solid #e2e8f0; text-align: center; font-size: 13px;">${it.taxRate ?? 0}%</td>
+        <td style="padding: 10px 12px; border-bottom: 1px solid #e2e8f0; text-align: right; font-size: 13px; font-weight: 600;">${formatCurrency(it.lineTotal ?? it.unitPrice * it.quantity)}</td>
+      </tr>
+    `).join('')
+
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Invoice - ${invoiceNumber}</title>
+        <style>
+          @page { size: A4 portrait; margin: 15mm; }
+          * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #0f172a; margin: 0; padding: 24px; font-size: 13px; }
+          .header { display: flex; justify-content: space-between; border-bottom: 2px solid #2563eb; padding-bottom: 16px; margin-bottom: 20px; }
+          .brand-title { font-size: 24px; font-weight: 800; color: #1e40af; margin: 0; }
+          .brand-sub { font-size: 11px; color: #64748b; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 600; margin-top: 4px; }
+          .inv-title { text-align: right; font-size: 13px; color: #475569; }
+          .inv-title strong { font-size: 20px; color: #0f172a; font-family: monospace; display: block; }
+          .grid-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px 16px; margin-bottom: 20px; }
+          .meta-label { font-size: 10px; text-transform: uppercase; color: #64748b; font-weight: 700; margin-bottom: 2px; }
+          .meta-val { font-size: 13px; font-weight: 600; color: #0f172a; }
+          table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+          th { background: #f1f5f9; color: #475569; font-size: 11px; text-transform: uppercase; font-weight: 700; padding: 10px 12px; border-bottom: 1px solid #cbd5e1; }
+          .totals-wrap { display: flex; justify-content: flex-end; margin-bottom: 30px; }
+          .totals-table { width: 300px; border-collapse: collapse; }
+          .totals-table td { padding: 6px 12px; border-bottom: 1px solid #e2e8f0; }
+          .totals-table tr.total-row td { border-top: 2px solid #0f172a; border-bottom: none; font-size: 16px; font-weight: 800; color: #1e40af; }
+          .footer { text-align: center; border-top: 1px dashed #cbd5e1; padding-top: 16px; font-size: 12px; color: #64748b; }
+          .badge { display: inline-block; padding: 2px 8px; border-radius: 9999px; font-size: 11px; font-weight: 700; background: #dcfce7; color: #15803d; }
+          @media print { body { padding: 0; } }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <div>
+            <h1 class="brand-title">VANTRIX POS</h1>
+            <div class="brand-sub">Retail & Wholesale Operations</div>
+          </div>
+          <div class="inv-title">
+            <span>INVOICE</span>
+            <strong>${invoiceNumber}</strong>
+            <div style="margin-top: 4px;">Status: <span class="badge">${paymentStatus}</span></div>
+          </div>
+        </div>
+
+        <div class="grid-meta">
+          <div>
+            <div class="meta-label">Billed To</div>
+            <div class="meta-val" style="font-size: 14px;">${customerName}</div>
+            <div style="color: #64748b; font-size: 12px;">${customerAddress}</div>
+            <div style="color: #64748b; font-size: 12px;">${customerPhone} • ${customerEmail}</div>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+            <div>
+              <div class="meta-label">Invoice Date</div>
+              <div class="meta-val">${formatDate(invoiceDate)}</div>
+            </div>
+            <div>
+              <div class="meta-label">Due Date</div>
+              <div class="meta-val">${formatDate(dueDate)}</div>
+            </div>
+            <div>
+              <div class="meta-label">Order Ref</div>
+              <div class="meta-val" style="font-family: monospace;">${orderId}</div>
+            </div>
+            <div>
+              <div class="meta-label">Payment Method</div>
+              <div class="meta-val">${paymentMethod}</div>
+            </div>
+          </div>
+        </div>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="text-align: left;">Item Description</th>
+              <th style="text-align: center; width: 60px;">Qty</th>
+              <th style="text-align: right; width: 110px;">Unit Price</th>
+              <th style="text-align: center; width: 70px;">Tax</th>
+              <th style="text-align: right; width: 120px;">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${itemsRows.length > 0 ? itemsRows : `
+              <tr>
+                <td style="padding: 10px 12px; border-bottom: 1px solid #e2e8f0;">POS Sale Order Items (${orderId})</td>
+                <td style="text-align: center; padding: 10px 12px; border-bottom: 1px solid #e2e8f0;">1</td>
+                <td style="text-align: right; padding: 10px 12px; border-bottom: 1px solid #e2e8f0;">${formatCurrency(subtotal)}</td>
+                <td style="text-align: center; padding: 10px 12px; border-bottom: 1px solid #e2e8f0;">—</td>
+                <td style="text-align: right; padding: 10px 12px; border-bottom: 1px solid #e2e8f0; font-weight: 600;">${formatCurrency(subtotal)}</td>
+              </tr>
+            `}
+          </tbody>
+        </table>
+
+        <div class="totals-wrap">
+          <table class="totals-table">
+            <tr>
+              <td style="color: #64748b;">Subtotal</td>
+              <td style="text-align: right; font-weight: 600;">${formatCurrency(subtotal)}</td>
+            </tr>
+            <tr>
+              <td style="color: #64748b;">Discount</td>
+              <td style="text-align: right; font-weight: 600; color: #dc2626;">-${formatCurrency(discount)}</td>
+            </tr>
+            <tr>
+              <td style="color: #64748b;">Tax</td>
+              <td style="text-align: right; font-weight: 600;">${formatCurrency(tax)}</td>
+            </tr>
+            <tr class="total-row">
+              <td>Total Amount</td>
+              <td style="text-align: right;">${formatCurrency(total)}</td>
+            </tr>
+          </table>
+        </div>
+
+        <div class="footer">
+          <strong>Thank you for your business!</strong>
+          <div style="font-size: 11px; margin-top: 4px;">For any questions regarding this invoice, please contact support.</div>
+        </div>
+
+        <script>
+          window.onload = function() {
+            setTimeout(function() {
+              window.print();
+            }, 300);
+          };
+        </script>
+      </body>
+      </html>
+    `
+
+    printWindow.document.open()
+    printWindow.document.write(html)
+    printWindow.document.close()
   }
 
   return (
