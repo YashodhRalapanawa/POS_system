@@ -322,7 +322,7 @@ export function calculateReturnItemFinancials({ originalItem, returnQuantity, pr
 export async function getStoreTaxConfig(admin, storeId) {
     const { data: settings } = await admin
         .from("store_settings")
-        .select("store_id, default_tax_rate, prices_include_tax, show_tax_breakdown, currency, currency_code")
+        .select("store_id, default_tax_rate, prices_include_tax, show_tax_breakdown, currency")
         .eq("store_id", storeId)
         .maybeSingle();
 

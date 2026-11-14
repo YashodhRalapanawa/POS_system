@@ -97,15 +97,19 @@ export function formatReturnResponse(returnRecord, options = {}) {
         rejectionReason: returnRecord.rejection_reason || null,
         itemsCount: formattedItems.reduce((acc, curr) => acc + curr.quantity, 0),
         items: formattedItems,
-        creditNoteId: creditNote?.id || null,
-        creditNoteNumber: creditNote?.credit_note_number || null,
+        creditNoteId: creditNote?.id || (returnRecord.status === "Completed" ? returnRecord.id : null),
+        creditNoteNumber:
+            creditNote?.credit_note_number ||
+            (returnRecord.status === "Completed"
+                ? `CN-${String(returnRecord.return_number || "").replace(/^RET-?/i, "")}`
+                : null),
         createdAt: returnRecord.created_at,
         updatedAt: returnRecord.updated_at,
     };
 }
 
 /**
- * Fetches return with order, customer, items, and credit notes.
+ * Fetches return with order, customer, and items.
  */
 export async function fetchReturnWithDetails(admin, column, value, storeId = null) {
     let query = admin
@@ -114,11 +118,10 @@ export async function fetchReturnWithDetails(admin, column, value, storeId = nul
             *,
             customer:customers (id, name, code, phone, email, address, city, country),
             order:orders (
-                id, order_number, store_id, status, subtotal, total_amount, currency_code, currency,
+                id, order_number, store_id, status, subtotal, total_amount,
                 order_items (id, product_id, product_name, sku, quantity, unit_price, tax_rate, tax_amount, line_total)
             ),
-            return_items (*),
-            credit_notes (id, credit_note_number, total_amount, status)
+            return_items (*)
         `)
         .eq(column, value);
 
@@ -322,7 +325,12 @@ export async function createCustomerReturn(admin, {
         p_store_id: effectiveStoreId,
         p_kind: "return",
     });
-    if (nextNum) returnNumber = nextNum;
+    returnNumber = nextNum || `RET-${Date.now().toString().slice(-6)}`;
+
+    // Normalize refundMethod for DB check constraint ('Original Payment', 'Cash', 'Card', 'Store Credit')
+    const dbRefundMethod = ["Original Payment", "Cash", "Card", "Store Credit"].includes(refundMethod)
+        ? refundMethod
+        : "Original Payment";
 
     // Insert Return record
     const { data: insertedReturn, error: insertErr } = await admin
@@ -331,10 +339,9 @@ export async function createCustomerReturn(admin, {
             store_id: effectiveStoreId,
             order_id: order.id,
             customer_id: order.customer_id,
-            invoice_id: resolvedInvoiceId || null,
-            ...(returnNumber ? { return_number: returnNumber } : {}),
+            return_number: returnNumber,
             reason,
-            refund_method: refundMethod,
+            refund_method: dbRefundMethod,
             notes: String(notes || "").trim(),
             subtotal: calculatedSubtotal,
             tax_amount: calculatedTax,
@@ -376,6 +383,7 @@ export async function createCustomerReturn(admin, {
  *  - Approved -> Completed (triggers restock + generates Credit Note)
  */
 export async function updateReturnStatus(admin, {
+    userClient = null,
     returnId,
     storeId,
     userId,
@@ -411,66 +419,77 @@ export async function updateReturnStatus(admin, {
         return { error: "Rejected returns cannot be modified.", status: 400 };
     }
 
+    // Use userClient so guard_return_update() trigger sees auth.uid() and has_permission('returns.process')
+    const dbUpdater = userClient || admin;
     const nowIso = new Date().toISOString();
-    const updates = {
-        updated_at: nowIso,
-    };
 
     if (nextStatus === "Approved") {
         if (currentStatus !== "Pending") {
             return { error: `Only Pending returns can be Approved. Current status: ${currentStatus}.`, status: 400 };
         }
-        updates.status = "Approved";
-        updates.approved_by = userId;
-        updates.approved_at = nowIso;
+        const { error: updateErr } = await dbUpdater
+            .from("returns")
+            .update({
+                status: "Approved",
+                approved_by: userId,
+                approved_at: nowIso,
+                updated_at: nowIso,
+            })
+            .eq("id", rawReturn.id);
+
+        if (updateErr) {
+            return { error: `Failed to approve return: ${updateErr.message}`, status: 500 };
+        }
     } else if (nextStatus === "Rejected") {
         if (!rejectionReason && !notes) {
             return { error: "A rejection reason is required to reject a return.", status: 400 };
         }
-        updates.status = "Rejected";
-        updates.rejected_by = userId;
-        updates.rejected_at = nowIso;
-        updates.rejection_reason = rejectionReason || notes;
+        const { error: updateErr } = await dbUpdater
+            .from("returns")
+            .update({
+                status: "Rejected",
+                rejected_by: userId,
+                rejected_at: nowIso,
+                rejection_reason: rejectionReason || notes,
+                updated_at: nowIso,
+            })
+            .eq("id", rawReturn.id);
+
+        if (updateErr) {
+            return { error: `Failed to reject return: ${updateErr.message}`, status: 500 };
+        }
     } else if (nextStatus === "Completed") {
-        // Can complete from Approved (or directly from Pending with immediate approval)
-        updates.status = "Completed";
-        updates.approved_by = rawReturn.approved_by || userId;
-        updates.approved_at = rawReturn.approved_at || nowIso;
-        updates.processed_by = userId;
-        updates.completed_at = nowIso;
+        // guard_return_update() requires Pending -> Approved -> Completed
+        if (currentStatus === "Pending") {
+            const { error: approveErr } = await dbUpdater
+                .from("returns")
+                .update({
+                    status: "Approved",
+                    approved_by: userId,
+                    approved_at: nowIso,
+                    updated_at: nowIso,
+                })
+                .eq("id", rawReturn.id);
 
-        // Trigger stock restock for items with restock = true
-        const itemsToRestock = (current.items || []).filter((it) => it.restock);
-        if (itemsToRestock.length > 0) {
-            const stockMovements = itemsToRestock.map((it) => ({
-                store_id: rawReturn.store_id,
-                product_id: it.productId,
-                adjustment_type: "Return",
-                quantity: it.quantity,
-                reference_type: "return",
-                reference_id: rawReturn.id,
-                notes: `Return #${current.returnNumber}`,
-                created_by: userId,
-            }));
-
-            await admin.from("stock_movements").insert(stockMovements);
+            if (approveErr) {
+                return { error: `Failed to approve return before completion: ${approveErr.message}`, status: 500 };
+            }
         }
 
-        // Auto-create or ensure Credit Note exists
-        await ensureCreditNoteForReturn(admin, {
-            returnRow: rawReturn,
-            returnItems: current.items,
-            userId,
-        });
-    }
+        // Now transition Approved -> Completed (trigger automatically inserts 'Return' stock_movements and updates order status)
+        const { error: completeErr } = await dbUpdater
+            .from("returns")
+            .update({
+                status: "Completed",
+                processed_by: userId,
+                completed_at: nowIso,
+                updated_at: nowIso,
+            })
+            .eq("id", rawReturn.id);
 
-    const { error: updateErr } = await admin
-        .from("returns")
-        .update(updates)
-        .eq("id", rawReturn.id);
-
-    if (updateErr) {
-        return { error: `Failed to update return status: ${updateErr.message}`, status: 500 };
+        if (completeErr) {
+            return { error: `Failed to complete return: ${completeErr.message}`, status: 500 };
+        }
     }
 
     const refreshed = await fetchReturnWithDetails(admin, "id", rawReturn.id, rawReturn.store_id);

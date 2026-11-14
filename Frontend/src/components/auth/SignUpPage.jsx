@@ -80,7 +80,7 @@ function describedBy(...ids) {
 }
 
 function SignUpPage() {
-  const { register, isEmailTaken, isUsernameTaken } = useAuth()
+  const { register, isEmailTaken, isUsernameTaken, isSetupComplete, setupStatusLoaded } = useAuth()
   const navigate = useNavigate()
   const firstFieldRef = useRef(null)
 
@@ -89,13 +89,16 @@ function SignUpPage() {
   const [submitted, setSubmitted] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [serverErrors, setServerErrors] = useState({})
+  const [generalError, setGeneralError] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [termsDoc, setTermsDoc] = useState(null)
   const [created, setCreated] = useState(null)
 
   useEffect(() => {
-    firstFieldRef.current?.focus()
-  }, [])
+    if (!isSetupComplete) {
+      firstFieldRef.current?.focus()
+    }
+  }, [isSetupComplete])
 
   const closeTerms = useCallback(() => setTermsDoc(null), [])
 
@@ -109,6 +112,7 @@ function SignUpPage() {
   const setField = (field, value) => {
     setValues((current) => ({ ...current, [field]: value }))
     setServerErrors((current) => (current[field] ? { ...current, [field]: undefined } : current))
+    if (generalError) setGeneralError('')
   }
 
   const handleChange = (event) => {
@@ -130,6 +134,7 @@ function SignUpPage() {
     if (submitting) return
 
     setSubmitted(true)
+    setGeneralError('')
     const firstInvalid = fieldOrder.find((field) => errors[field])
     if (firstInvalid) {
       focusField(firstInvalid)
@@ -156,6 +161,7 @@ function SignUpPage() {
 
     if (!result.ok) {
       setServerErrors(result.fieldErrors || {})
+      if (result.error) setGeneralError(result.error)
       const firstServerError = fieldOrder.find((field) => result.fieldErrors?.[field])
       if (firstServerError) focusField(firstServerError)
       return
@@ -184,11 +190,51 @@ function SignUpPage() {
               Account created. Your store &lsquo;{created.businessName}&rsquo; is ready.
             </h1>
             <p className="auth-card__subtitle">
-              Sign in as the administrator (<strong>{created.email}</strong>) to finish setting up your store and add
+              Sign in as the primary administrator (<strong>{created.email}</strong>) to finish setting up your store and add
               your staff.
             </p>
             <Button type="button" className="auth-submit" onClick={continueToSignIn} autoFocus>
               Continue to Sign In
+            </Button>
+          </section>
+        </div>
+      </div>
+    )
+  }
+
+  if (setupStatusLoaded && isSetupComplete) {
+    return (
+      <div className="auth-page">
+        <div className="auth-page__inner">
+          <section className="auth-card auth-card--result" aria-labelledby="auth-title">
+            <AuthBrand />
+            <h1 id="auth-title" className="auth-card__title" tabIndex={-1}>
+              Initial System Setup Already Completed
+            </h1>
+            <p className="auth-card__subtitle" style={{ marginBottom: '1rem' }}>
+              This Vantrix POS system already has a registered Primary Administrator. Public registration is locked to
+              protect your store.
+            </p>
+            <div
+              className="auth-alert"
+              style={{
+                background: '#f8fafc',
+                borderColor: '#cbd5e1',
+                color: '#334155',
+                textAlign: 'left',
+                marginBottom: '1.25rem',
+                fontSize: '0.9rem',
+              }}
+            >
+              <strong>How to add staff or promote another Admin:</strong>
+              <ul style={{ margin: '0.5rem 0 0 1.2rem', padding: 0 }}>
+                <li>Sign in with an existing <strong>Admin</strong> account.</li>
+                <li>Open the <strong>Users</strong> section in the Dashboard.</li>
+                <li>Click <strong>+ Add User</strong> to create new Cashiers, Managers, or Admins, or select an existing staff member to <strong>Promote to Admin</strong>.</li>
+              </ul>
+            </div>
+            <Button type="button" className="auth-submit" onClick={() => navigate(paths.login)} autoFocus>
+              Go to Sign In
             </Button>
           </section>
         </div>
@@ -240,10 +286,16 @@ function SignUpPage() {
         <section className="auth-card" aria-labelledby="auth-title">
           <AuthBrand />
 
-          <h1 id="auth-title" className="auth-card__title">Create your business account</h1>
+          <h1 id="auth-title" className="auth-card__title">Initial Store &amp; Administrator Setup</h1>
           <p className="auth-card__subtitle">
-            Set up your store and administrator account to start using Vantrix POS.
+            Create the primary Business and Administrator account for this POS system. Once created, public sign-up will be locked.
           </p>
+
+          {generalError && (
+            <div className="auth-alert auth-alert--error auth-card__notice" role="alert" style={{ marginBottom: '1rem' }}>
+              {generalError}
+            </div>
+          )}
 
           <form className="auth-form" onSubmit={handleSubmit} noValidate>
             <fieldset className="auth-section" disabled={submitting}>

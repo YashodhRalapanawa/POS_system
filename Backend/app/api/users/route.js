@@ -227,6 +227,8 @@ export async function POST(request) {
 
         const name = String(body?.fullName || body?.name || "").trim();
         const email = String(body?.email || "").trim().toLowerCase();
+        const rawUsername = String(body?.username || "").trim();
+        const rawPassword = String(body?.password || "");
         const employeeId = String(body?.employeeCode || body?.employeeId || "").trim();
         const rawRoleId = body?.roleId;
         const rawRole = body?.role;
@@ -281,16 +283,25 @@ export async function POST(request) {
         }
 
         // 2. Validate selected role from public.roles
-        let roleQuery = admin.from("roles").select("id, name, code, is_active");
+        let roleQuery = admin.from("roles").select("id, name");
         const roleIdNum = Number(rawRoleId);
 
         if (Number.isInteger(roleIdNum) && roleIdNum > 0) {
             roleQuery = roleQuery.eq("id", roleIdNum);
         } else if (typeof rawRoleId === "string" && rawRoleId.trim()) {
-            roleQuery = roleQuery.or(`id.eq.${rawRoleId},code.ilike.${rawRoleId.toUpperCase()},name.ilike.${rawRoleId}`);
+            const cleanRoleStr = rawRoleId.trim();
+            const normalizedName =
+                cleanRoleStr.toUpperCase() === "ADMIN" || cleanRoleStr.toUpperCase() === "ADMINISTRATOR"
+                    ? "Admin"
+                    : cleanRoleStr;
+            roleQuery = roleQuery.ilike("name", normalizedName);
         } else if (rawRole) {
             const roleName = String(rawRole).trim();
-            roleQuery = roleQuery.or(`name.ilike.${roleName},code.ilike.${roleName.toUpperCase()}`);
+            const normalizedName =
+                roleName.toUpperCase() === "ADMIN" || roleName.toUpperCase() === "ADMINISTRATOR"
+                    ? "Admin"
+                    : roleName;
+            roleQuery = roleQuery.ilike("name", normalizedName);
         }
 
         const { data: roleRow, error: roleErr } = await roleQuery.maybeSingle();
@@ -302,11 +313,17 @@ export async function POST(request) {
             );
         }
 
-        if (roleRow.is_active === false) {
-            return Response.json(
-                { success: false, message: "Cannot assign an inactive role." },
-                { status: 400 }
-            );
+        const isCreatingAdmin =
+            (roleRow.name || "").toLowerCase() === "admin" ||
+            (roleRow.name || "").toLowerCase() === "administrator";
+        if (isCreatingAdmin) {
+            const callerRole = String(auth.user.role?.name || auth.user.role || "").toUpperCase();
+            if (callerRole !== "ADMIN" && callerRole !== "ADMINISTRATOR") {
+                return Response.json(
+                    { success: false, message: "Only an Administrator can create an account with the Administrator role." },
+                    { status: 403 }
+                );
+            }
         }
 
         // 3. Resolve and validate target store and business
@@ -316,7 +333,7 @@ export async function POST(request) {
         if (targetStoreId) {
             const { data: storeRow, error: storeErr } = await admin
                 .from("stores")
-                .select("id, business_id, name, code, is_active")
+                .select("id, business_id, name")
                 .eq("id", targetStoreId)
                 .maybeSingle();
 
@@ -329,7 +346,7 @@ export async function POST(request) {
             businessId = storeRow.business_id;
         } else {
             // Default to authenticated user's store or the first available store
-            let storeQuery = admin.from("stores").select("id, business_id, name, code");
+            let storeQuery = admin.from("stores").select("id, business_id, name");
             if (auth.user?.storeId) {
                 storeQuery = storeQuery.eq("id", auth.user.storeId);
             }
@@ -369,37 +386,36 @@ export async function POST(request) {
             finalEmployeeCode = `EMP-${String((userCount || 0) + 1).padStart(3, "0")}`;
         }
 
-        // Step 4: Supabase Auth Account Creation (Invitation Workflow)
+        if (rawUsername) {
+            const { data: existingUsername } = await admin
+                .from("users")
+                .select("id")
+                .ilike("username", rawUsername)
+                .maybeSingle();
+
+            if (existingUsername) {
+                return Response.json(
+                    { success: false, message: "This username is already taken by another staff member." },
+                    { status: 409 }
+                );
+            }
+        }
+
+        // Step 4: Supabase Auth Account Creation (Direct Password or Invitation Workflow)
         const appUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL || "http://localhost:5173";
         const redirectTo = `${appUrl}/reset-password`;
 
         let authUserId = null;
 
         try {
-            const { data: inviteData, error: inviteErr } = await admin.auth.admin.inviteUserByEmail(email, {
-                data: {
-                    full_name: name,
-                },
-                redirectTo,
-            });
-
-            if (inviteData?.user?.id) {
-                authUserId = inviteData.user.id;
-            } else if (inviteErr) {
-                const errMsg = (inviteErr.message || "").toLowerCase();
-                if (errMsg.includes("already registered") || errMsg.includes("user already exists") || inviteErr.status === 422) {
-                    return Response.json(
-                        { success: false, message: "A user with this email already exists in authentication." },
-                        { status: 409 }
-                    );
-                }
-
-                // Fallback to createUser (if email invitation service is not enabled in environment)
+            if (rawPassword) {
                 const { data: createData, error: createErr } = await admin.auth.admin.createUser({
                     email,
+                    password: rawPassword,
                     email_confirm: true,
                     user_metadata: {
                         full_name: name,
+                        ...(rawUsername ? { username: rawUsername } : {}),
                     },
                 });
 
@@ -413,11 +429,57 @@ export async function POST(request) {
                     }
                     return Response.json(
                         { success: false, message: `Failed to create authentication account: ${createErr.message}` },
-                        { status: 500 }
+                        { status: 400 }
                     );
                 }
 
                 authUserId = createData?.user?.id;
+            } else {
+                const { data: inviteData, error: inviteErr } = await admin.auth.admin.inviteUserByEmail(email, {
+                    data: {
+                        full_name: name,
+                        ...(rawUsername ? { username: rawUsername } : {}),
+                    },
+                    redirectTo,
+                });
+
+                if (inviteData?.user?.id) {
+                    authUserId = inviteData.user.id;
+                } else if (inviteErr) {
+                    const errMsg = (inviteErr.message || "").toLowerCase();
+                    if (errMsg.includes("already registered") || errMsg.includes("user already exists") || inviteErr.status === 422) {
+                        return Response.json(
+                            { success: false, message: "A user with this email already exists in authentication." },
+                            { status: 409 }
+                        );
+                    }
+
+                    // Fallback to createUser (if email invitation service is not enabled in environment)
+                    const { data: createData, error: createErr } = await admin.auth.admin.createUser({
+                        email,
+                        email_confirm: true,
+                        user_metadata: {
+                            full_name: name,
+                            ...(rawUsername ? { username: rawUsername } : {}),
+                        },
+                    });
+
+                    if (createErr) {
+                        const createErrMsg = (createErr.message || "").toLowerCase();
+                        if (createErrMsg.includes("already registered") || createErrMsg.includes("user already exists") || createErr.status === 422) {
+                            return Response.json(
+                                { success: false, message: "A user with this email already exists in authentication." },
+                                { status: 409 }
+                            );
+                        }
+                        return Response.json(
+                            { success: false, message: `Failed to create authentication account: ${createErr.message}` },
+                            { status: 500 }
+                        );
+                    }
+
+                    authUserId = createData?.user?.id;
+                }
             }
         } catch (authError) {
             return Response.json(
@@ -433,6 +495,13 @@ export async function POST(request) {
             );
         }
 
+        const generatedUsername =
+            rawUsername ||
+            email
+                .split("@")[0]
+                .replace(/[^A-Za-z0-9_]/g, "_")
+                .slice(0, 20);
+
         // Step 4: Create staff profile in public.users
         const { data: createdProfile, error: profileInsertError } = await admin
             .from("users")
@@ -443,6 +512,7 @@ export async function POST(request) {
                 role_id: roleRow.id,
                 full_name: name,
                 email,
+                username: generatedUsername,
                 employee_code: finalEmployeeCode,
                 status,
                 all_registers: allRegisters,
@@ -450,8 +520,8 @@ export async function POST(request) {
             .select(`
                 id, full_name, email, username, employee_code, phone, avatar_url, status,
                 all_registers, last_login, created_at, role_id, store_id,
-                role:roles (id, name, code),
-                store:stores (id, name, code)
+                role:roles (id, name),
+                store:stores (id, name)
             `)
             .maybeSingle();
 
@@ -469,17 +539,18 @@ export async function POST(request) {
             );
         }
 
+        const resolvedRoleName = createdProfile.role?.name || roleRow.name || "Staff";
         const roleObj = {
             id: createdProfile.role?.id ?? roleRow.id,
-            name: createdProfile.role?.name || roleRow.name,
-            code: createdProfile.role?.code || roleRow.code || "STAFF",
+            name: resolvedRoleName,
+            code: resolvedRoleName.toUpperCase().replace(/\s+/g, "_"),
         };
 
         const storeObj = createdProfile.store
             ? {
                   id: createdProfile.store.id,
                   name: createdProfile.store.name,
-                  code: createdProfile.store.code || null,
+                  code: null,
               }
             : null;
 

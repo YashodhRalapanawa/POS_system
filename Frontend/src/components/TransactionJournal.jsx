@@ -1,8 +1,10 @@
 import Card from './ui/Card'
 import Badge from './ui/Badge'
-import { transactions } from '../data/mockDashboard'
+import { useCurrency } from '../context/CurrencyContext'
 
-function TransactionJournal() {
+function TransactionJournal({ transactions = [] }) {
+  const { formatCurrency } = useCurrency()
+
   return (
     <Card title="Store Journal & Live Invoices" subtitle="Real-time synchronized across all registers" className="journal-card">
       <div className="journal-card__toolbar">
@@ -23,21 +25,29 @@ function TransactionJournal() {
           <span>Amount</span>
         </div>
 
-        {transactions.map((transaction) => (
-          <div key={transaction.id} className="journal-table__row">
-            <span className="journal-table__id">{transaction.id}</span>
-            <span>{transaction.time}</span>
-            <span>{transaction.cashier}</span>
-            <span>{transaction.lane}</span>
-            <span>{transaction.customer}</span>
-            <span>{transaction.items}</span>
-            <span>{transaction.payment}</span>
-            <div className="journal-table__amount-wrap">
-              <span className="journal-table__amount">{transaction.amount}</span>
-              <Badge tone={transaction.status === 'Return' ? 'danger' : 'success'}>{transaction.status}</Badge>
-            </div>
+        {transactions.length === 0 ? (
+          <div style={{ padding: '2.5rem 1rem', textAlign: 'center', color: '#64748b' }}>
+            No transactions recorded today yet.
           </div>
-        ))}
+        ) : (
+          transactions.map((transaction) => (
+            <div key={transaction.id} className="journal-table__row">
+              <span className="journal-table__id">{transaction.id}</span>
+              <span>{transaction.time}</span>
+              <span>{transaction.cashier}</span>
+              <span>{transaction.lane || 'Lane #01'}</span>
+              <span>{transaction.customer}</span>
+              <span>{transaction.items ?? '—'}</span>
+              <span>{transaction.payment}</span>
+              <div className="journal-table__amount-wrap">
+                <span className="journal-table__amount">{typeof transaction.amount === 'number' ? formatCurrency(transaction.amount) : transaction.amount}</span>
+                <Badge tone={transaction.status === 'Return' || transaction.status === 'Cancelled' ? 'danger' : 'success'}>
+                  {transaction.status || 'Paid'}
+                </Badge>
+              </div>
+            </div>
+          ))
+        )}
       </div>
     </Card>
   )

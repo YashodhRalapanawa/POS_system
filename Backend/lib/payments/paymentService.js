@@ -204,41 +204,8 @@ export async function finalizeOrderAndDeductStockOnce(admin, { orderId, storeId,
         };
     }
 
-    // If order is in 'draft' status, invoke Developer 1's atomic `complete_pos_order` RPC
-    if (currentStatus === "draft") {
-        const { data: rpcRes, error: rpcErr } = await admin.rpc("complete_pos_order", {
-            p_order_id: order.id,
-            p_store_id: order.store_id,
-            p_user_id: userId,
-        });
-
-        if (rpcErr) {
-            return {
-                completed: false,
-                error: rpcErr.message || "Failed to complete order and deduct inventory.",
-            };
-        }
-
-        // Normalize status to 'Completed' so both POS and Returns triggers work seamlessly
-        await admin
-            .from("orders")
-            .update({
-                status: "Completed",
-                completed_at: new Date().toISOString(),
-                completed_by: userId,
-            })
-            .eq("id", order.id);
-
-        return {
-            completed: true,
-            alreadyCompleted: Boolean(rpcRes?.is_duplicate),
-            stockDeducted: !rpcRes?.is_duplicate,
-            orderStatus: "Completed",
-        };
-    }
-
-    // If order was in 'Pending' or 'Held' status and stock was not yet deducted
-    if ((existingMovementsCount || 0) === 0 && (currentStatus === "pending" || currentStatus === "held")) {
+    // If order was in 'draft', 'pending', or 'held' status and stock was not yet deducted
+    if ((existingMovementsCount || 0) === 0 && ["draft", "pending", "held"].includes(currentStatus)) {
         const { data: orderItems } = await admin
             .from("order_items")
             .select("product_id, quantity")
@@ -272,7 +239,7 @@ export async function finalizeOrderAndDeductStockOnce(admin, { orderId, storeId,
         .update({
             status: "Completed",
             completed_at: order.completed_at || new Date().toISOString(),
-            completed_by: userId,
+            updated_at: new Date().toISOString(),
         })
         .eq("id", order.id);
 
@@ -426,34 +393,17 @@ export async function processInvoicePayment(admin, {
         processed_at: nowIso,
     };
 
-    // Try inserting with invoice_id & notes; fallback cleanly if migration 202610090003 is not yet applied
-    let insertedPayment = null;
-    const { data: payWithInv, error: payWithInvErr } = await admin
+    const { data: insertedPayment, error: payFallbackErr } = await admin
         .from("payments")
-        .insert({
-            ...basePaymentPayload,
-            invoice_id: rawInvoice.id,
-            notes: String(notes || "").trim(),
-        })
+        .insert(basePaymentPayload)
         .select("*")
         .single();
 
-    if (!payWithInvErr && payWithInv) {
-        insertedPayment = payWithInv;
-    } else {
-        const { data: payFallback, error: payFallbackErr } = await admin
-            .from("payments")
-            .insert(basePaymentPayload)
-            .select("*")
-            .single();
-
-        if (payFallbackErr || !payFallback) {
-            return {
-                error: `Failed to record payment: ${payFallbackErr?.message || payWithInvErr?.message || "Unknown error"}`,
-                status: 500,
-            };
-        }
-        insertedPayment = payFallback;
+    if (payFallbackErr || !insertedPayment) {
+        return {
+            error: `Failed to record payment: ${payFallbackErr?.message || "Unknown error"}`,
+            status: 500,
+        };
     }
 
     // 5. Update invoice status ONLY if payment succeeded (Failed/Pending payments never mark invoice Paid)

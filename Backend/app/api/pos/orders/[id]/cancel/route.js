@@ -81,8 +81,8 @@ export async function POST(request, { params }) {
             return errorResponse(`Order ${order.order_number} is already cancelled.`, 400);
         }
 
-        // Only draft orders can be cancelled in this task
-        if (currentStatus !== "draft") {
+        // Only draft/pending/held orders can be cancelled in this task
+        if (!["draft", "pending", "held"].includes(currentStatus)) {
             return errorResponse(
                 `Only draft orders can be cancelled. This order is in "${order.status}" status and cannot be cancelled here.`,
                 400
@@ -95,28 +95,17 @@ export async function POST(request, { params }) {
             ? `${order.notes}\n${cancelUserStamp}${reason ? `: ${reason}` : ""}`
             : `${cancelUserStamp}${reason ? `: ${reason}` : ""}`;
 
-        // Attempt RPC call
-        const { data: rpcRes, error: rpcErr } = await admin.rpc("cancel_pos_draft_order", {
-            p_order_id: orderId,
-            p_store_id: order.store_id,
-            p_user_id: auth.user.id,
-            p_reason: reason,
-        });
+        const { error: updateErr } = await admin
+            .from("orders")
+            .update({
+                status: "Cancelled",
+                notes: updatedNotes,
+                updated_at: new Date().toISOString(),
+            })
+            .eq("id", orderId);
 
-        if (rpcErr || !rpcRes?.success) {
-            // Direct fallback update
-            const { error: updateErr } = await admin
-                .from("orders")
-                .update({
-                    status: "cancelled",
-                    notes: updatedNotes,
-                    updated_at: new Date().toISOString(),
-                })
-                .eq("id", orderId);
-
-            if (updateErr) {
-                return errorResponse(`Failed to cancel order: ${updateErr.message}`, 500);
-            }
+        if (updateErr) {
+            return errorResponse(`Failed to cancel order: ${updateErr.message}`, 500);
         }
 
         // Return updated order

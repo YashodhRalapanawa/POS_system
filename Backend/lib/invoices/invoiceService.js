@@ -190,11 +190,11 @@ export async function fetchInvoiceWithDetails(admin, column, value, storeId = nu
         .select(`
             *,
             customer:customers (id, name, code, customer_type, phone, email, address, city, country, is_walk_in),
-            store:stores (id, name, code, address, city, country, phone, email),
             order:orders (
                 id, order_number, store_id, customer_id, cashier_user_id,
                 status, discount_type, discount_value, subtotal, discount_amount, tax_amount, total_amount,
-                currency_code, currency, notes, created_at, completed_at,
+                notes, created_at, completed_at,
+                store:stores (id, name, code, address, city, country, phone, email),
                 order_items (
                     id, order_id, product_id, product_name, sku, quantity,
                     unit_price, unit_cost, discount_amount, tax_rate, tax_amount, line_total, created_at
@@ -216,17 +216,7 @@ export async function fetchInvoiceWithDetails(admin, column, value, storeId = nu
         return { invoice: null, error };
     }
 
-    // Try loading dedicated invoice_items if table exists; fallback to order.order_items
-    let items = invoice.order?.order_items || [];
-    const { data: invItems, error: invItemsErr } = await admin
-        .from("invoice_items")
-        .select("*")
-        .eq("invoice_id", invoice.id)
-        .order("created_at", { ascending: true });
-
-    if (!invItemsErr && Array.isArray(invItems) && invItems.length > 0) {
-        items = invItems;
-    }
+    const items = invoice.order?.order_items || [];
 
     return {
         invoice: formatInvoiceResponse(invoice, {
@@ -261,7 +251,7 @@ export async function generateInvoiceFromOrder(admin, {
         .select(`
             id, order_number, store_id, customer_id, cashier_user_id,
             status, discount_type, discount_value, subtotal, discount_amount, tax_amount, total_amount,
-            currency_code, currency, notes, created_at, completed_at,
+            notes, created_at, completed_at,
             customer:customers (id, name, code, customer_type, phone, email, address, city, country, is_walk_in),
             store:stores (id, name, code),
             order_items (
@@ -417,7 +407,7 @@ export async function generateInvoiceFromOrder(admin, {
         due_date: dueDate ? new Date(dueDate).toISOString() : nowIso,
         customer_name: cust?.name || "Walk-in Customer",
         customer_code: cust?.code || "CUS-001",
-        customer_type: cust?.customer_type || "Individual",
+        customer_type: cust?.customer_type === "Business" ? "Business" : "Individual",
         customer_phone: cust?.phone || "",
         customer_email: cust?.email || "",
         customer_address: custAddress,
@@ -447,7 +437,6 @@ export async function generateInvoiceFromOrder(admin, {
         };
     }
 
-    // 6. Insert invoice_items if public.invoice_items table exists
     const invoiceItemsPayload = financials.items.map((it) => ({
         store_id: targetStoreId,
         invoice_id: insertedInvoice.id,
@@ -463,8 +452,6 @@ export async function generateInvoiceFromOrder(admin, {
         tax_amount: it.taxAmount,
         line_total: it.lineTotal,
     }));
-
-    await admin.from("invoice_items").insert(invoiceItemsPayload);
 
     // 7. Return full formatted invoice
     const fullResult = await fetchInvoiceWithDetails(admin, "id", insertedInvoice.id, targetStoreId);

@@ -1,12 +1,6 @@
 import Badge from './ui/Badge'
 import Button from './ui/Button'
-
-function formatCurrency(value) {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-  }).format(value)
-}
+import { useCurrency } from '../context/CurrencyContext'
 
 function formatDate(value) {
   if (!value) return '—'
@@ -19,6 +13,7 @@ function formatDate(value) {
 }
 
 function InvoiceDetailsModal({ invoice, onClose }) {
+  const { formatCurrency } = useCurrency()
   if (!invoice) return null
 
   return (

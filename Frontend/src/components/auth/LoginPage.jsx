@@ -1,16 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
-import { authUsers } from '../../data/mockUsers'
 import { paths } from '../../routes'
 import Button from '../ui/Button'
 import AuthBrand from './AuthBrand'
 
-// Demo-only helper list: role + username, no passwords rendered per row.
-const demoAccounts = authUsers.map(({ id, username, role, status }) => ({ id, username, role, status }))
-
 function LoginPage() {
-  const { login } = useAuth()
+  const { login, isSetupComplete, setupStatusLoaded } = useAuth()
   const location = useLocation()
   // Sign-up and password reset hand over the email and a confirmation notice.
   const prefillEmail = location.state?.email || ''
@@ -64,13 +60,6 @@ function LoginPage() {
     }
   }
 
-  const fillDemoAccount = (username) => {
-    setIdentifier(username)
-    setFieldErrors((current) => ({ ...current, identifier: undefined }))
-    setAuthError('')
-    passwordRef.current?.focus()
-  }
-
   return (
     <div className="auth-page">
       <div className="auth-page__inner">
@@ -81,6 +70,29 @@ function LoginPage() {
           <p className="auth-card__subtitle">
             Enter your staff credentials to access the register and back office.
           </p>
+
+          {setupStatusLoaded && !isSetupComplete && (
+            <div
+              className="auth-alert auth-card__notice"
+              role="status"
+              style={{
+                background: '#eff6ff',
+                borderColor: '#93c5fd',
+                color: '#1e3a8a',
+                marginBottom: '1rem',
+              }}
+            >
+              <strong style={{ display: 'block', marginBottom: '0.25rem' }}>
+                First-Time System Setup Required
+              </strong>
+              <span>
+                No Administrator account has been created yet.{' '}
+                <Link to={paths.signup} className="auth-link" style={{ fontWeight: 600 }}>
+                  Create the primary Store &amp; Admin account →
+                </Link>
+              </span>
+            </div>
+          )}
 
           {notice && (
             <div className="auth-alert auth-alert--success auth-card__notice" role="status">
@@ -169,35 +181,18 @@ function LoginPage() {
           </form>
         </section>
 
-        <p className="auth-footer">
-          New to Vantrix?{' '}
-          <Link to={paths.signup} className="auth-link">
-            Create a business account
-          </Link>
-        </p>
-
-        <section className="auth-demo" aria-labelledby="auth-demo-title">
-          <div className="auth-demo__header">
-            <h2 id="auth-demo-title">Demo accounts</h2>
-            <span>Password for all: <code>demo1234</code></span>
-          </div>
-          <ul className="auth-demo__list">
-            {demoAccounts.map((account) => (
-              <li key={account.id}>
-                <button
-                  type="button"
-                  className="auth-demo__row"
-                  onClick={() => fillDemoAccount(account.username)}
-                  disabled={submitting}
-                >
-                  <span className="auth-demo__role">{account.role}</span>
-                  <code>{account.username}</code>
-                  {account.status !== 'Active' && <span className="auth-demo__status">{account.status}</span>}
-                </button>
-              </li>
-            ))}
-          </ul>
-        </section>
+        {setupStatusLoaded && !isSetupComplete ? (
+          <p className="auth-footer">
+            New installation?{' '}
+            <Link to={paths.signup} className="auth-link">
+              Set up your store &amp; primary Admin account
+            </Link>
+          </p>
+        ) : (
+          <p className="auth-footer" style={{ color: '#6b7280', fontSize: '0.85rem' }}>
+            Need a staff account? Contact your Store Administrator to be added from the Users dashboard.
+          </p>
+        )}
       </div>
     </div>
   )

@@ -109,6 +109,7 @@ export async function PATCH(request, { params }) {
         const scopedStoreId = isAdmin ? null : authStoreId;
 
         const result = await updateReturnStatus(admin, {
+            userClient: auth.client,
             returnId: returnParam,
             storeId: scopedStoreId,
             userId: auth.user.id,

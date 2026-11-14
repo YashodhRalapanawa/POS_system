@@ -4,7 +4,7 @@ import Card from './ui/Card'
 import Badge from './ui/Badge'
 import SupplierFormModal from './SupplierFormModal'
 import SupplierDetailsModal from './SupplierDetailsModal'
-import { initialSuppliers, supplierStatusOptions, supplierTypeOptions } from '../data/mockSuppliers'
+import { supplierStatusOptions, supplierTypeOptions } from '../data/mockSuppliers'
 import {
   getSuppliers,
   createSupplier,
@@ -13,19 +13,19 @@ import {
 } from '../services/api'
 import { PERMISSIONS, usePermission } from '../auth/permissions'
 
-const SUPPLIERS_STORAGE_KEY = 'vantrix.suppliers'
+const SUPPLIERS_STORAGE_KEY = 'vantrix.suppliers.live'
 
 function loadInitialSuppliers() {
   try {
     const saved = localStorage.getItem(SUPPLIERS_STORAGE_KEY)
     if (saved) {
       const parsed = JSON.parse(saved)
-      if (Array.isArray(parsed) && parsed.length > 0) {
+      if (Array.isArray(parsed)) {
         return parsed
       }
     }
-  } catch {}
-  return initialSuppliers
+  } catch { }
+  return []
 }
 
 function formatDate(value) {
@@ -82,11 +82,11 @@ function SuppliersPage() {
             setSuppliers(list)
             try {
               localStorage.setItem(SUPPLIERS_STORAGE_KEY, JSON.stringify(list))
-            } catch {}
+            } catch { }
           }
         } else if (res && !res.ok) {
           if (res.status === 401) {
-            setApiError('Session not authenticated. Displaying cached supplier records.')
+            // Silently use cached supplier records without showing alarming alert banner
           } else if (res.status === 403) {
             setApiError('Missing suppliers.view permission on server.')
           } else {
@@ -94,9 +94,7 @@ function SuppliersPage() {
           }
         }
       } catch {
-        if (isMounted) {
-          setApiError('Unable to connect to backend server. Using cached supplier data.')
-        }
+        // Graceful fallback to cached data
       } finally {
         if (isMounted) {
           setLoading(false)
@@ -186,7 +184,7 @@ function SuppliersPage() {
             const next = [newSupplier, ...current.filter((s) => s.id !== newSupplier.id)]
             try {
               localStorage.setItem(SUPPLIERS_STORAGE_KEY, JSON.stringify(next))
-            } catch {}
+            } catch { }
             return next
           })
 
@@ -205,7 +203,7 @@ function SuppliersPage() {
                 if (Array.isArray(list)) setSuppliers(list)
               }
             })
-            .catch(() => {})
+            .catch(() => { })
         } else {
           setFormError(res?.data?.message || res?.error || 'Failed to create supplier.')
         }
@@ -217,7 +215,7 @@ function SuppliersPage() {
             const next = current.map((s) => (s.id === editingSupplier.id ? updatedSupplier : s))
             try {
               localStorage.setItem(SUPPLIERS_STORAGE_KEY, JSON.stringify(next))
-            } catch {}
+            } catch { }
             return next
           })
 
@@ -236,7 +234,7 @@ function SuppliersPage() {
                 if (Array.isArray(list)) setSuppliers(list)
               }
             })
-            .catch(() => {})
+            .catch(() => { })
         } else {
           setFormError(res?.data?.message || res?.error || 'Failed to update supplier.')
         }
@@ -271,16 +269,16 @@ function SuppliersPage() {
           const next = current.map((s) =>
             s.id === statusConfirmTarget.id
               ? {
-                  ...s,
-                  status: newStatus,
-                  isActive: newIsActive,
-                  updatedAt: new Date().toISOString(),
-                }
+                ...s,
+                status: newStatus,
+                isActive: newIsActive,
+                updatedAt: new Date().toISOString(),
+              }
               : s
           )
           try {
             localStorage.setItem(SUPPLIERS_STORAGE_KEY, JSON.stringify(next))
-          } catch {}
+          } catch { }
           return next
         })
 
@@ -299,7 +297,7 @@ function SuppliersPage() {
               if (Array.isArray(list)) setSuppliers(list)
             }
           })
-          .catch(() => {})
+          .catch(() => { })
       } else {
         const errorMsg = res?.data?.message || res?.error || 'Failed to update supplier status.'
         setApiError(errorMsg)
@@ -581,8 +579,8 @@ function SuppliersPage() {
                 {isTogglingStatus
                   ? 'Processing...'
                   : statusConfirmTarget.status === 'Active'
-                  ? 'Deactivate'
-                  : 'Activate'}
+                    ? 'Deactivate'
+                    : 'Activate'}
               </Button>
             </div>
           </div>

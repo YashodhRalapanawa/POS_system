@@ -28,7 +28,7 @@ export async function getDailySalesReport(admin, { storeId, targetDate = new Dat
         `)
         .gte("created_at", startOfDay)
         .lte("created_at", endOfDay)
-        .neq("status", "cancelled");
+        .in("status", ["Completed", "Refunded"]);
 
     if (storeId) {
         ordersQuery = ordersQuery.eq("store_id", storeId);
@@ -168,7 +168,7 @@ export async function getMonthlySalesReport(admin, { storeId, year, month }) {
         `)
         .gte("created_at", startDate)
         .lte("created_at", endDate)
-        .neq("status", "cancelled");
+        .in("status", ["Completed", "Refunded"]);
 
     if (storeId) {
         ordersQuery = ordersQuery.eq("store_id", storeId);
@@ -306,7 +306,7 @@ export async function getDashboardSummary(admin, { storeId }) {
         `)
         .gte("created_at", startOfToday)
         .lte("created_at", endOfToday)
-        .neq("status", "cancelled");
+        .in("status", ["Completed", "Refunded"]);
 
     if (storeId) todayOrdersQuery = todayOrdersQuery.eq("store_id", storeId);
     const { data: todayOrders = [] } = await todayOrdersQuery;

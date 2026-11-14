@@ -108,9 +108,9 @@ export async function GET(request, context) {
             .from("products")
             .select(`
                 id, store_id, category_id, supplier_id, sku, barcode, name, description,
-                purchase_price, selling_price, tax_rate, reorder_level, unit_of_measure,
+                purchase_price, selling_price, tax_rate, reorder_level,
                 status, created_at, updated_at,
-                category:categories(id, name, code, status),
+                category:categories(id, name, status),
                 supplier:suppliers(id, name, code, status),
                 inventory(current_stock, reserved_stock)
             `)
@@ -290,10 +290,7 @@ export async function PATCH(request, context) {
             updates.description = String(body.description || "").trim();
         }
 
-        // Unit of Measure
-        if (body.unitOfMeasure !== undefined || body.uom !== undefined) {
-            updates.unit_of_measure = normalizeUom(body.unitOfMeasure || body.uom);
-        }
+        // Unit of Measure (omitted from table updates since column does not exist in schema)
 
         // Selling Price
         if (body.sellingPrice !== undefined || body.selling_price !== undefined) {
@@ -452,9 +449,9 @@ export async function PATCH(request, context) {
             .eq("id", id)
             .select(`
                 id, store_id, category_id, supplier_id, sku, barcode, name, description,
-                purchase_price, selling_price, tax_rate, reorder_level, unit_of_measure,
+                purchase_price, selling_price, tax_rate, reorder_level,
                 status, created_at, updated_at,
-                category:categories(id, name, code, status),
+                category:categories(id, name, status),
                 supplier:suppliers(id, name, code, status),
                 inventory(current_stock, reserved_stock)
             `)

@@ -42,9 +42,8 @@ export async function GET(request) {
                 id, store_id, product_id, adjustment_type, reason, notes,
                 quantity, quantity_change, quantity_before, quantity_after,
                 reference_type, reference_id, created_by, created_at,
-                product:products(id, name, sku, barcode),
-                store:stores(id, name),
-                creator:users!stock_movements_created_by_fkey(id, full_name, email)
+                product:products(id, name, sku, barcode, store:stores(id, name)),
+                creator:users(id, full_name, email)
             `, { count: "exact" });
 
         // Scoping by user store
@@ -88,8 +87,7 @@ export async function GET(request) {
                     id, store_id, product_id, adjustment_type, reason, notes,
                     quantity, quantity_change, quantity_before, quantity_after,
                     reference_type, reference_id, created_by, created_at,
-                    product:products(id, name, sku, barcode),
-                    store:stores(id, name)
+                    product:products(id, name, sku, barcode, store:stores(id, name))
                 `, { count: "exact" })
                 .order("created_at", { ascending: false })
                 .range(offset, offset + limit - 1);
@@ -142,7 +140,7 @@ export async function GET(request) {
 
 function formatMovement(m) {
     const prod = m.product && typeof m.product === "object" ? m.product : null;
-    const store = m.store && typeof m.store === "object" ? m.store : null;
+    const store = (m.store && typeof m.store === "object" ? m.store : null) || (prod?.store && typeof prod.store === "object" ? prod.store : null);
     const creator = m.creator && typeof m.creator === "object" ? m.creator : null;
 
     return {

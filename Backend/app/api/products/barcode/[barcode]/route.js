@@ -100,9 +100,9 @@ export async function GET(request, context) {
             .from("products")
             .select(`
                 id, store_id, category_id, supplier_id, sku, barcode, name, description,
-                purchase_price, selling_price, tax_rate, reorder_level, unit_of_measure,
+                purchase_price, selling_price, tax_rate, reorder_level,
                 status, created_at, updated_at,
-                category:categories(id, name, code, status),
+                category:categories(id, name, status),
                 supplier:suppliers(id, name, code, status),
                 inventory(current_stock, reserved_stock)
             `)

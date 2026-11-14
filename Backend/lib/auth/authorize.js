@@ -62,14 +62,59 @@ export function authorizeRole(user, allowedRoles = []) {
 }
 
 /**
+ * In-memory cache for verified tokens and user profiles (60-second TTL).
+ * Eliminates redundant remote Supabase Auth network round-trips to Singapore on every API call.
+ */
+const AUTH_CACHE_TTL_MS = 60_000;
+const authCache = new Map();
+
+export function invalidateAuthCache(token) {
+    if (token) authCache.delete(token);
+    else authCache.clear();
+}
+
+async function resolveAuthenticatedProfile(token) {
+    const cached = authCache.get(token);
+    if (cached && Date.now() < cached.expiresAt) {
+        return { authUser: cached.authUser, profile: cached.profile, error: null };
+    }
+
+    const { user: authUser, error: authError } = await verifyUserToken(token);
+    if (authError || !authUser) {
+        return { authUser: null, profile: null, error: authError || new Error("Invalid token") };
+    }
+
+    const client = createUserClient(token);
+    let profile;
+    try {
+        profile = await loadStaffProfile(client, authUser.id);
+    } catch (err) {
+        return { authUser, profile: null, error: err };
+    }
+
+    if (profile) {
+        if (authCache.size > 500) {
+            const firstKey = authCache.keys().next().value;
+            authCache.delete(firstKey);
+        }
+        authCache.set(token, {
+            authUser,
+            profile,
+            expiresAt: Date.now() + AUTH_CACHE_TTL_MS,
+        });
+    }
+
+    return { authUser, profile, error: null };
+}
+
+/**
  * Complete server-side authentication and role authorization pipeline for Route Handlers.
  * Flow:
  *  1. Extract Bearer token from Authorization header (401 on missing)
- *  2. Verify token with Supabase Auth (401 on invalid/expired)
- *  3. Create user-scoped Supabase client with RLS headers
- *  4. Load staff profile from public.users (404 on not found)
- *  5. Check active status (403 on inactive)
- *  6. Check role against allowedRoles (403 on role mismatch)
+ *  2. Verify token with Supabase Auth (or memory cache)
+ *  3. Load staff profile from public.users (or memory cache)
+ *  4. Check active status (403 on inactive)
+ *  5. Check role against allowedRoles (403 on role mismatch)
  *
  * Returns:
  *  - On failure: { authorized: false, response: Response }
@@ -88,31 +133,14 @@ export async function requireAuthAndRole(request, allowedRoles = []) {
         };
     }
 
-    // 2. Verify token
-    const { user: authUser, error: authError } = await verifyUserToken(token);
+    // 2. Resolve verified user and profile (cached for performance)
+    const { authUser, profile, error: authError } = await resolveAuthenticatedProfile(token);
     if (authError || !authUser) {
         return {
             authorized: false,
             response: Response.json(
                 { success: false, message: "Invalid or expired authentication token" },
                 { status: 401 }
-            ),
-        };
-    }
-
-    // 3. User-scoped client
-    const client = createUserClient(token);
-
-    // 4. Load staff profile
-    let profile;
-    try {
-        profile = await loadStaffProfile(client, authUser.id);
-    } catch {
-        return {
-            authorized: false,
-            response: Response.json(
-                { success: false, message: "Failed to load staff profile" },
-                { status: 500 }
             ),
         };
     }
@@ -127,7 +155,7 @@ export async function requireAuthAndRole(request, allowedRoles = []) {
         };
     }
 
-    // 5. Active check
+    // 3. Active check
     if (profile.status !== "Active" || profile.isActive === false) {
         return {
             authorized: false,
@@ -138,7 +166,7 @@ export async function requireAuthAndRole(request, allowedRoles = []) {
         };
     }
 
-    // 6. Role check
+    // 4. Role check
     if (allowedRoles && allowedRoles.length > 0 && !hasRole(profile, allowedRoles)) {
         return {
             authorized: false,
@@ -149,6 +177,7 @@ export async function requireAuthAndRole(request, allowedRoles = []) {
         };
     }
 
+    const client = createUserClient(token);
     return {
         authorized: true,
         user: profile,
@@ -227,28 +256,13 @@ export async function requireAuthAndPermission(request, permissionKey) {
         };
     }
 
-    const { user: authUser, error: authError } = await verifyUserToken(token);
+    const { authUser, profile, error: authError } = await resolveAuthenticatedProfile(token);
     if (authError || !authUser) {
         return {
             authorized: false,
             response: Response.json(
                 { success: false, message: "Invalid or expired authentication token" },
                 { status: 401 }
-            ),
-        };
-    }
-
-    const client = createUserClient(token);
-
-    let profile;
-    try {
-        profile = await loadStaffProfile(client, authUser.id);
-    } catch {
-        return {
-            authorized: false,
-            response: Response.json(
-                { success: false, message: "Failed to load staff profile" },
-                { status: 500 }
             ),
         };
     }
@@ -283,6 +297,7 @@ export async function requireAuthAndPermission(request, permissionKey) {
         };
     }
 
+    const client = createUserClient(token);
     return {
         authorized: true,
         user: profile,

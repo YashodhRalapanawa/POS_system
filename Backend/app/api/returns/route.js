@@ -64,8 +64,7 @@ export async function GET(request) {
                 *,
                 customer:customers (id, name, code, phone, email),
                 order:orders (id, order_number, status, total_amount),
-                return_items (*),
-                credit_notes (id, credit_note_number, total_amount, status)
+                return_items (*)
             `, { count: "exact" });
 
         if (effectiveStoreId) {

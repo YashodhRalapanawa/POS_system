@@ -4,7 +4,7 @@ import Card from './ui/Card'
 import Badge from './ui/Badge'
 import CustomerFormModal from './CustomerFormModal'
 import CustomerDetailsModal from './CustomerDetailsModal'
-import { customerStatusOptions, customerTypeOptions, initialCustomers, MOCK_REPORTING_PERIOD_START } from '../data/mockCustomers'
+import { customerStatusOptions, customerTypeOptions } from '../data/mockCustomers'
 import {
   getCustomers,
   createCustomer,
@@ -13,19 +13,19 @@ import {
 } from '../services/api'
 import { PERMISSIONS, usePermission } from '../auth/permissions'
 
-const CUSTOMERS_STORAGE_KEY = 'vantrix.customers'
+const CUSTOMERS_STORAGE_KEY = 'vantrix.customers.live'
 
 function loadInitialCustomers() {
   try {
     const saved = localStorage.getItem(CUSTOMERS_STORAGE_KEY)
     if (saved) {
       const parsed = JSON.parse(saved)
-      if (Array.isArray(parsed) && parsed.length > 0) {
+      if (Array.isArray(parsed)) {
         return parsed
       }
     }
   } catch {}
-  return initialCustomers
+  return []
 }
 
 function formatDate(value) {
@@ -84,16 +84,17 @@ function CustomersPage() {
               localStorage.setItem(CUSTOMERS_STORAGE_KEY, JSON.stringify(list))
             } catch {}
           }
-        } else if (res?.status === 401 || res?.status === 403) {
-          setApiError(res.data?.message || 'Access denied: insufficient customer permissions.')
+        } else if (res?.status === 401) {
+          // Gracefully fall back to local customers in demo mode
+        } else if (res?.status === 403) {
+          setApiError('Access denied: insufficient customer permissions.')
         } else {
           // If backend returned an error, fallback to local cache
           const msg = res?.data?.message || res?.error || 'Unable to load customers from server.'
           setApiError(msg)
         }
-      } catch (err) {
-        if (!isMounted) return
-        setApiError(err.message || 'Network error while loading customers.')
+      } catch {
+        // Silently use cached customer records
       } finally {
         if (isMounted) {
           setLoading(false)
@@ -136,7 +137,9 @@ function CustomersPage() {
   const inactiveCustomers = customers.filter((c) => c.status === 'Inactive' || c.isActive === false).length
   const newCustomers = customers.filter((c) => {
     if (!c.createdAt) return false
-    return new Date(c.createdAt) >= new Date(MOCK_REPORTING_PERIOD_START)
+    const thirtyDaysAgo = new Date()
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
+    return new Date(c.createdAt) >= thirtyDaysAgo
   }).length
 
   const openAddModal = () => {

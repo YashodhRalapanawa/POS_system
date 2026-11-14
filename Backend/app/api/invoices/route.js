@@ -58,15 +58,72 @@ export async function GET(request) {
 
         const admin = getSupabaseAdmin();
 
+        // Auto-backfill missing invoices for any Completed or Refunded POS orders
+        try {
+            let completedOrdersQuery = admin
+                .from("orders")
+                .select(`
+                    id, order_number, store_id, customer_id, status,
+                    subtotal, discount_amount, tax_amount, total_amount, completed_at, created_at,
+                    customer:customers (id, name, code, customer_type, phone, email, address, city, country)
+                `)
+                .in("status", ["Completed", "Refunded"])
+                .order("created_at", { ascending: false })
+                .limit(100);
+
+            if (effectiveStoreId) {
+                completedOrdersQuery = completedOrdersQuery.eq("store_id", effectiveStoreId);
+            }
+
+            const { data: completedOrders } = await completedOrdersQuery;
+            if (Array.isArray(completedOrders) && completedOrders.length > 0) {
+                const orderIds = completedOrders.map((o) => o.id);
+                const { data: existingInvs } = await admin
+                    .from("invoices")
+                    .select("order_id")
+                    .in("order_id", orderIds);
+
+                const existingOrderIds = new Set((existingInvs || []).map((i) => i.order_id));
+                const missingOrders = completedOrders.filter((o) => !existingOrderIds.has(o.id));
+
+                for (const ord of missingOrders) {
+                    const cust = ord.customer || {};
+                    const custAddress = [cust.address, cust.city, cust.country].filter(Boolean).join(", ");
+                    const invDate = ord.completed_at || ord.created_at || new Date().toISOString();
+
+                    await admin.from("invoices").insert({
+                        store_id: ord.store_id,
+                        order_id: ord.id,
+                        customer_id: ord.customer_id || null,
+                        invoice_date: invDate,
+                        due_date: invDate,
+                        customer_name: cust.name || "Walk-in Customer",
+                        customer_code: cust.code || "CUS-001",
+                        customer_type: cust.customer_type === "Business" ? "Business" : "Individual",
+                        customer_phone: cust.phone || "",
+                        customer_email: cust.email || "",
+                        customer_address: custAddress,
+                        subtotal: Number(ord.subtotal || 0),
+                        discount_amount: Number(ord.discount_amount || 0),
+                        tax_amount: Number(ord.tax_amount || 0),
+                        total_amount: Number(ord.total_amount || ord.subtotal || 0),
+                        status: ord.status === "Refunded" ? "Refunded" : "Paid",
+                    });
+                }
+            }
+        } catch (backfillErr) {
+            console.warn("Non-fatal warning backfilling missing invoices:", backfillErr);
+        }
+
         let query = admin
             .from("invoices")
             .select(
                 `
                 *,
                 customer:customers (id, name, code, customer_type, phone, email, address, city, country, is_walk_in),
-                store:stores (id, name, code),
                 order:orders (
-                    id, order_number, store_id, status, currency_code, currency, notes,
+                    id, order_number, store_id, status, notes,
+                    store:stores (id, name, code),
                     order_items (
                         id, order_id, product_id, product_name, sku, quantity,
                         unit_price, unit_cost, discount_amount, tax_rate, tax_amount, line_total
@@ -135,31 +192,12 @@ export async function GET(request) {
             return errorResponse(`Failed to retrieve invoices: ${error.message}`, 500);
         }
 
-        // Load invoice_items if table exists for returned invoices
-        const invoiceIds = (rows || []).map((r) => r.id);
-        const itemsByInvoiceMap = new Map();
-
-        if (invoiceIds.length > 0) {
-            const { data: invItemsRows, error: invItemsErr } = await admin
-                .from("invoice_items")
-                .select("*")
-                .in("invoice_id", invoiceIds);
-
-            if (!invItemsErr && Array.isArray(invItemsRows)) {
-                for (const item of invItemsRows) {
-                    const list = itemsByInvoiceMap.get(item.invoice_id) || [];
-                    list.push(item);
-                    itemsByInvoiceMap.set(item.invoice_id, list);
-                }
-            }
-        }
-
         let formattedInvoices = (rows || []).map((inv) =>
             formatInvoiceResponse(inv, {
                 order: inv.order,
                 customer: inv.customer,
                 store: inv.store,
-                items: itemsByInvoiceMap.get(inv.id) || inv.order?.order_items || [],
+                items: inv.order?.order_items || [],
                 payments: inv.order?.payments || [],
             })
         );

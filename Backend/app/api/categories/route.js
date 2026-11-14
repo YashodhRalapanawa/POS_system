@@ -51,11 +51,11 @@ export async function GET(request) {
             query = query.eq("status", statusFilter);
         }
 
-        // Search filtering (name or code or description)
+        // Search filtering (name or description)
         if (search) {
             const cleanSearch = search.replace(/[%_,]/g, "");
             if (cleanSearch) {
-                query = query.or(`name.ilike.%${cleanSearch}%,code.ilike.%${cleanSearch}%,description.ilike.%${cleanSearch}%`);
+                query = query.or(`name.ilike.%${cleanSearch}%,description.ilike.%${cleanSearch}%`);
             }
         }
 

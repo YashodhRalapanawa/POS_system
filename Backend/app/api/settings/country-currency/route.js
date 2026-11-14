@@ -1,11 +1,13 @@
 import { getSupabaseAdmin, isSupabaseAdminConfigured } from "../../../../lib/supabase/admin.js";
 import { requireAuthAndPermission } from "../../../../lib/auth/authorize.js";
 import {
+    COUNTRIES,
     isValidCountryCode,
     isValidCurrencyCode,
     isValidCountryCurrencyCombination,
     resolveCurrencyForCountry,
     getCountryByCode,
+    getCountryByName,
 } from "../../../../lib/currency/currencies.js";
 
 export const dynamic = "force-dynamic";
@@ -66,35 +68,39 @@ export async function GET(request) {
             return errorResponse("No active store found to retrieve settings.", 404);
         }
 
-        // Query store_settings
-        const { data: storeSetting, error: settingErr } = await admin
-            .from("store_settings")
-            .select("store_id, country_code, currency_code, currency, updated_at, updated_by")
-            .eq("store_id", targetStoreId)
-            .maybeSingle();
+        // Query store_settings and stores (compatible with pos_schema_v2)
+        const [{ data: storeSetting, error: settingErr }, { data: storeRow }] = await Promise.all([
+            admin
+                .from("store_settings")
+                .select("store_id, currency, updated_at, updated_by")
+                .eq("store_id", targetStoreId)
+                .maybeSingle(),
+            admin
+                .from("stores")
+                .select("id, country, business_id")
+                .eq("id", targetStoreId)
+                .maybeSingle(),
+        ]);
 
         if (settingErr) {
             return errorResponse("Failed to load store settings.", 500);
         }
 
         // Determine configured country and currency codes
-        let countryCode = storeSetting?.country_code || "LK";
-        let currencyCode = storeSetting?.currency_code || storeSetting?.currency || "LKR";
+        let currencyCode = storeSetting?.currency || "LKR";
+        let countryCode = "LK";
 
-        // Fallback to store table if store_settings didn't have country_code
-        if (!storeSetting?.country_code) {
-            const { data: storeRow } = await admin
-                .from("stores")
-                .select("country_code, currency_code")
-                .eq("id", targetStoreId)
-                .maybeSingle();
-
-            if (storeRow?.country_code) {
-                countryCode = storeRow.country_code;
+        if (storeRow?.country) {
+            const byName = getCountryByName(storeRow.country);
+            const byCode = getCountryByCode(storeRow.country);
+            if (byName) {
+                countryCode = byName.countryCode;
+            } else if (byCode) {
+                countryCode = byCode.countryCode;
             }
-            if (storeRow?.currency_code) {
-                currencyCode = storeRow.currency_code;
-            }
+        } else if (currencyCode) {
+            const byCurr = COUNTRIES.find((c) => c.currencyCode === currencyCode);
+            if (byCurr) countryCode = byCurr.countryCode;
         }
 
         // Resolve authoritative metadata
@@ -182,15 +188,14 @@ export async function PATCH(request) {
 
         const now = new Date().toISOString();
         const updatedBy = auth.user.id;
+        const metadata = resolveCurrencyForCountry(countryCode);
 
-        // Upsert store_settings
+        // Upsert store_settings (using currency column present in pos_schema_v2)
         const { error: upsertErr } = await admin
             .from("store_settings")
             .upsert(
                 {
                     store_id: targetStoreId,
-                    country_code: countryCode,
-                    currency_code: currencyCode,
                     currency: currencyCode,
                     updated_by: updatedBy,
                     updated_at: now,
@@ -203,17 +208,27 @@ export async function PATCH(request) {
             return errorResponse("Failed to update store settings.", 500);
         }
 
-        // Also sync to store record
-        await admin
+        // Also sync to store and business records
+        const { data: updatedStore } = await admin
             .from("stores")
             .update({
-                country_code: countryCode,
-                currency_code: currencyCode,
+                country: metadata.countryName,
                 updated_at: now,
             })
-            .eq("id", targetStoreId);
+            .eq("id", targetStoreId)
+            .select("business_id")
+            .maybeSingle();
 
-        const metadata = resolveCurrencyForCountry(countryCode);
+        if (updatedStore?.business_id) {
+            await admin
+                .from("businesses")
+                .update({
+                    country: metadata.countryName,
+                    currency: currencyCode,
+                    updated_at: now,
+                })
+                .eq("id", updatedStore.business_id);
+        }
 
         const payload = {
             countryCode: metadata.countryCode,

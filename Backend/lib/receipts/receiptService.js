@@ -62,7 +62,7 @@ export async function buildReceiptForInvoice(admin, {
         admin
             .from("store_settings")
             .select(`
-                store_id, currency, currency_code, default_receipt_printer,
+                store_id, currency, default_receipt_printer,
                 receipt_footer, show_store_address, show_cashier_name,
                 show_tax_breakdown, prices_include_tax, default_tax_rate
             `)

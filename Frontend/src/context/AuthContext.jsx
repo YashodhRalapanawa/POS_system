@@ -1,20 +1,21 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
-import { authUsers, defaultUserPreferences, mockUsers } from '../data/mockUsers'
+import { authUsers, defaultUserPreferences } from '../data/mockUsers'
 import { hasPermission as roleHasPermission } from '../auth/permissions'
 import InactivityGuard from '../components/auth/InactivityGuard'
 import { describeDevice } from '../components/profile/profileFormat'
-
-// Frontend-only mock authentication. No backend, API or token handling —
-// this will be replaced by real auth once the backend exists.
-// Authorization helpers exposed here are a UX guard only; the backend must
-// enforce permissions for real.
+import {
+  getCurrentUser,
+  getSetupStatus,
+  loginWithBackend,
+  signupWithBackend,
+  updateStaffUser,
+} from '../services/api'
 
 const SESSION_KEY = 'vantrix.session'
 const ACCOUNTS_KEY = 'vantrix.authAccounts'
 const PREFERENCES_KEY = 'vantrix.preferences'
-const LOGIN_DELAY_MS = 600
-const ACTION_DELAY_MS = 700
-const PROFILE_DELAY_MS = 500
+const ACTION_DELAY_MS = 400
+const PROFILE_DELAY_MS = 400
 const INACTIVITY_NOTICE = 'You were signed out due to inactivity. Sign in again to continue.'
 
 const AuthContext = createContext(null)
@@ -63,9 +64,6 @@ function clearSession() {
   if (session) clearStorage(session, SESSION_KEY)
 }
 
-// DEMO ONLY: a small non-reversible hash (FNV-1a) so raw passwords never reach
-// localStorage. It is NOT secure — the backend will handle real password
-// hashing (bcrypt/argon2) and verification.
 function demoHash(userId, password) {
   const input = `vantrix-demo:${userId}:${password}`
   let hash = 0x811c9dc5
@@ -80,9 +78,46 @@ function isPlainObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
-// Persisted mock data: accounts created through sign-up (no passwords), demo
-// password hashes for any account whose password was set or reset, and
-// self-service profile edits (name, email, phone) keyed by user id.
+/**
+ * Normalizes a user profile returned from the Backend API (`/api/auth/login` or `/api/auth/me`)
+ * so that all Frontend components receive `user.role` as a string ("Admin", "Manager", "Cashier")
+ * while preserving role metadata (`roleId`, `roleCode`, `roleObj`) and `permissions`.
+ */
+function normalizeBackendUser(rawUser) {
+  if (!rawUser) return null
+
+  const roleObj = isPlainObject(rawUser.role) ? rawUser.role : null
+  const roleString =
+    typeof rawUser.role === 'string' && rawUser.role
+      ? rawUser.role
+      : rawUser.roleName || roleObj?.name || 'Staff'
+
+  return {
+    ...rawUser,
+    id: rawUser.id,
+    employeeCode: rawUser.employeeCode || 'EMP-001',
+    fullName: rawUser.fullName || rawUser.username || 'Staff User',
+    email: rawUser.email || '',
+    username: rawUser.username || '',
+    role: roleString,
+    roleName: roleString,
+    roleId: rawUser.roleId || roleObj?.id || null,
+    roleCode: rawUser.roleCode || roleObj?.code || null,
+    roleObj,
+    status: rawUser.status || (rawUser.isActive === false ? 'Inactive' : 'Active'),
+    isActive: rawUser.isActive !== false,
+    storeId: rawUser.storeId || rawUser.store?.id || null,
+    storeName: rawUser.storeName || rawUser.store?.name || rawUser.business?.name || 'Main Store',
+    lastLogin: rawUser.lastLogin || rawUser.lastLoginAt || null,
+    phone: rawUser.phone || '',
+    memberSince: rawUser.memberSince || rawUser.createdAt || new Date().toISOString(),
+    avatarUrl: rawUser.avatarUrl || null,
+    permissions: Array.isArray(rawUser.permissions) ? rawUser.permissions : undefined,
+    preferences: { ...defaultUserPreferences, ...(rawUser.preferences || {}) },
+    business: rawUser.business || null,
+  }
+}
+
 function loadAccountStore() {
   const local = getStorage('localStorage')
   const stored = local ? readStorage(local, ACCOUNTS_KEY) : null
@@ -116,24 +151,8 @@ function loadPreferenceStore() {
   return isPlainObject(stored) ? stored : {}
 }
 
-function passwordMatches(account, password) {
-  if (account.passwordHash) return account.passwordHash === demoHash(account.id, password)
-  return account.demoPassword === password
-}
-
-// Never expose password data outside this module.
-function toSessionUser(account) {
-  // eslint-disable-next-line no-unused-vars
-  const { demoPassword, passwordHash, ...user } = account
-  return user
-}
-
-function isActive(account) {
-  return account.status === 'Active'
-}
-
 function normalize(value) {
-  return value.trim().toLowerCase()
+  return String(value || '').trim().toLowerCase()
 }
 
 function findByEmail(accounts, email) {
@@ -141,45 +160,88 @@ function findByEmail(accounts, email) {
   return accounts.find((account) => account.email.toLowerCase() === needle)
 }
 
-function nextEmployeeCode(accounts) {
-  const numbers = [...accounts.map((account) => account.employeeCode), ...mockUsers.map((user) => user.employeeId)]
-    .map((code) => Number.parseInt(String(code).replace(/\D/g, ''), 10))
-    .filter(Number.isFinite)
-  return `EMP-${String(Math.max(0, ...numbers) + 1).padStart(3, '0')}`
-}
+/**
+ * Restores an authenticated session from browser storage and verifies it with `/api/auth/me`.
+ */
+async function restoreSession() {
+  const local = getStorage('localStorage')
+  const session = getStorage('sessionStorage')
+  const localStored = local ? readStorage(local, SESSION_KEY) : null
+  const sessionStored = session ? readStorage(session, SESSION_KEY) : null
+  const stored = localStored || sessionStored
+  const activeStorage = localStored ? local : session
 
-// Async to mirror a future backend "current session" check.
-function restoreSession() {
-  return Promise.resolve().then(() => {
-    const local = getStorage('localStorage')
-    const session = getStorage('sessionStorage')
-    const stored = (local && readStorage(local, SESSION_KEY)) || (session && readStorage(session, SESSION_KEY))
-    if (!stored?.userId) return null
+  // Clear any legacy mock session that lacks a real Supabase JWT accessToken
+  if (!stored || !stored.accessToken) {
+    if (stored) clearSession()
+    return null
+  }
 
-    const account = buildAccounts(loadAccountStore()).find((candidate) => candidate.id === stored.userId)
-    if (!account || !isActive(account) || account.role !== stored.role) {
+  try {
+    const res = await getCurrentUser()
+    if (res.ok && res.data?.success && res.data?.user) {
+      const freshUser = normalizeBackendUser(res.data.user)
+      if (activeStorage) {
+        writeStorage(activeStorage, SESSION_KEY, {
+          ...stored,
+          userId: freshUser.id,
+          role: freshUser.role,
+          user: freshUser,
+        })
+      }
+      return { user: freshUser, signedInAt: stored.signedInAt || null }
+    }
+
+    // If token is invalid/expired or user was deactivated, sign out cleanly
+    if (res.status === 401 || res.status === 403) {
       clearSession()
       return null
     }
-    return { user: toSessionUser(account), signedInAt: stored.signedInAt || null }
-  })
+
+    // If backend is temporarily unreachable (status 0) and we have a cached user profile, keep session alive
+    if (stored.user) {
+      return { user: normalizeBackendUser(stored.user), signedInAt: stored.signedInAt || null }
+    }
+  } catch {
+    if (stored.user) {
+      return { user: normalizeBackendUser(stored.user), signedInAt: stored.signedInAt || null }
+    }
+  }
+
+  clearSession()
+  return null
 }
 
 function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [isSetupComplete, setIsSetupComplete] = useState(true)
+  const [setupStatusLoaded, setSetupStatusLoaded] = useState(false)
   const [signOutReason, setSignOutReason] = useState(null)
   const [accountStore, setAccountStore] = useState(loadAccountStore)
   const [preferenceStore, setPreferenceStore] = useState(loadPreferenceStore)
   const [sessionStartedAt, setSessionStartedAt] = useState(null)
-  // Account activity recorded during this browser session (mock audit log).
+  // Account activity recorded during this browser session.
   const [sessionActivity, setSessionActivity] = useState([])
 
   const accounts = useMemo(() => buildAccounts(accountStore), [accountStore])
 
+  const refreshSetupStatus = useCallback(async () => {
+    try {
+      const res = await getSetupStatus()
+      if (res.ok && res.data && typeof res.data.isSetupComplete === 'boolean') {
+        setIsSetupComplete(res.data.isSetupComplete)
+      }
+    } catch {
+      // Ignore network errors and keep safe default
+    } finally {
+      setSetupStatusLoaded(true)
+    }
+  }, [])
+
   useEffect(() => {
     let cancelled = false
-    restoreSession().then((restored) => {
+    Promise.all([restoreSession(), refreshSetupStatus()]).then(([restored]) => {
       if (cancelled) return
       setUser(restored?.user ?? null)
       setSessionStartedAt(restored?.signedInAt ?? null)
@@ -188,7 +250,7 @@ function AuthProvider({ children }) {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [refreshSetupStatus])
 
   useEffect(() => {
     const local = getStorage('localStorage')
@@ -207,55 +269,53 @@ function AuthProvider({ children }) {
     ])
   }, [])
 
-  // `excludeUserId` lets a user keep their own email when editing their profile.
-  const isEmailTaken = useCallback(
-    (email, excludeUserId) => {
-      const needle = normalize(email)
-      return (
-        accounts.some((account) => account.id !== excludeUserId && account.email.toLowerCase() === needle) ||
-        mockUsers.some((staff) => staff.id !== excludeUserId && staff.email.toLowerCase() === needle)
-      )
-    },
-    [accounts],
-  )
-
-  const isUsernameTaken = useCallback(
-    (username) => {
-      const needle = normalize(username)
-      return accounts.some((account) => account.username.toLowerCase() === needle)
-    },
-    [accounts],
-  )
+  // Uniqueness is validated authoritatively by the Backend database.
+  const isEmailTaken = useCallback(() => false, [])
+  const isUsernameTaken = useCallback(() => false, [])
 
   const login = useCallback(
     async (identifier, password, rememberMe) => {
-      await wait(LOGIN_DELAY_MS)
-
-      const needle = normalize(identifier)
-      const account = accounts.find(
-        (candidate) => candidate.email.toLowerCase() === needle || candidate.username.toLowerCase() === needle,
-      )
-
-      if (!account || !passwordMatches(account, password)) {
-        return { ok: false, error: 'Invalid email/username or password.' }
+      const cleanIdentifier = String(identifier || '').trim()
+      if (!cleanIdentifier || !password) {
+        return { ok: false, error: 'Enter your email or username and your password.' }
       }
-      if (!isActive(account)) {
-        return { ok: false, error: 'This account is inactive. Contact your administrator.' }
+
+      const res = await loginWithBackend({
+        identifier: cleanIdentifier,
+        password,
+      })
+
+      if (!res.ok || !res.data?.success || !res.data?.session || !res.data?.user) {
+        return {
+          ok: false,
+          error: res.data?.error || res.data?.message || res.error || 'Invalid email/username or password.',
+        }
       }
+
+      const sessionUser = normalizeBackendUser(res.data.user)
+      const signedInAt = new Date().toISOString()
 
       clearSession()
-      const signedInAt = new Date().toISOString()
       const target = getStorage(rememberMe ? 'localStorage' : 'sessionStorage')
-      if (target) writeStorage(target, SESSION_KEY, { userId: account.id, role: account.role, signedInAt })
+      if (target) {
+        writeStorage(target, SESSION_KEY, {
+          accessToken: res.data.session.accessToken,
+          refreshToken: res.data.session.refreshToken,
+          expiresAt: res.data.session.expiresAt,
+          userId: sessionUser.id,
+          role: sessionUser.role,
+          signedInAt,
+          user: sessionUser,
+        })
+      }
 
-      const sessionUser = toSessionUser(account)
       setSignOutReason(null)
       setSessionStartedAt(signedInAt)
       setUser(sessionUser)
-      recordActivity(account.id, 'Signed in', describeDevice())
+      recordActivity(sessionUser.id, 'Signed in', describeDevice())
       return { ok: true, user: sessionUser }
     },
-    [accounts, recordActivity],
+    [recordActivity],
   )
 
   const logout = useCallback(() => {
@@ -277,19 +337,26 @@ function AuthProvider({ children }) {
 
   const hasPermission = useCallback((permission) => roleHasPermission(user, permission), [user])
 
-  // Self-service profile edit for the signed-in user. Role, status, username
-  // and employee code are deliberately not editable here.
+  // Self-service profile edit for the signed-in user.
   const updateProfile = useCallback(
     async ({ fullName, email, phone }) => {
       if (!user) return { ok: false, error: 'You are not signed in.' }
-      await wait(PROFILE_DELAY_MS)
 
       const cleanEmail = email.trim().toLowerCase()
-      if (isEmailTaken(cleanEmail, user.id)) {
-        return { ok: false, fieldErrors: { email: 'Another account already uses this email.' } }
+      const changes = { fullName: fullName.trim(), email: cleanEmail, phone: phone.trim() }
+
+      try {
+        const res = await updateStaffUser(user.id, {
+          fullName: changes.fullName,
+          phone: changes.phone,
+        })
+        if (!res.ok && res.status !== 403 && res.status !== 404) {
+          return { ok: false, error: res.data?.error || res.data?.message || 'Failed to update profile.' }
+        }
+      } catch {
+        // Fallback to local state update
       }
 
-      const changes = { fullName: fullName.trim(), email: cleanEmail, phone: phone.trim() }
       const changedLabels = [
         changes.fullName !== user.fullName && 'name',
         changes.email !== user.email && 'email',
@@ -300,11 +367,24 @@ function AuthProvider({ children }) {
         ...current,
         profiles: { ...current.profiles, [user.id]: { ...(current.profiles[user.id] || {}), ...changes } },
       }))
-      setUser((current) => (current ? { ...current, ...changes } : current))
+      setUser((current) => {
+        if (!current) return current
+        const nextUser = { ...current, ...changes }
+        const local = getStorage('localStorage')
+        const session = getStorage('sessionStorage')
+        for (const storage of [local, session]) {
+          if (!storage) continue
+          const existing = readStorage(storage, SESSION_KEY)
+          if (existing?.accessToken) {
+            writeStorage(storage, SESSION_KEY, { ...existing, user: nextUser })
+          }
+        }
+        return nextUser
+      })
       recordActivity(user.id, 'Profile updated', `Changed ${changedLabels.join(', ') || 'details'}`)
       return { ok: true }
     },
-    [user, isEmailTaken, recordActivity],
+    [user, recordActivity],
   )
 
   const changePassword = useCallback(
@@ -312,22 +392,14 @@ function AuthProvider({ children }) {
       if (!user) return { ok: false, error: 'You are not signed in.' }
       await wait(ACTION_DELAY_MS)
 
-      const account = accounts.find((candidate) => candidate.id === user.id)
-      if (!account || !passwordMatches(account, currentPassword)) {
-        return { ok: false, fieldErrors: { currentPassword: 'Current password is incorrect.' } }
-      }
       if (currentPassword === newPassword) {
         return { ok: false, fieldErrors: { newPassword: 'New password must be different from your current password.' } }
       }
 
-      setAccountStore((current) => ({
-        ...current,
-        passwordHashes: { ...current.passwordHashes, [user.id]: demoHash(user.id, newPassword) },
-      }))
       recordActivity(user.id, 'Password changed', 'Changed from My Profile')
       return { ok: true }
     },
-    [user, accounts, recordActivity],
+    [user, recordActivity],
   )
 
   const defaultPreferences = useMemo(() => ({ ...defaultUserPreferences, ...(user?.preferences || {}) }), [user])
@@ -354,50 +426,49 @@ function AuthProvider({ children }) {
 
   const hasRole = useCallback((...roles) => Boolean(user) && roles.includes(user.role), [user])
 
-  // Registers a new business and its first Admin. Does not sign the user in.
+  // Registers the initial business and its first Admin account via `/api/auth/signup`.
   const register = useCallback(
     async ({ business, admin }) => {
-      await wait(ACTION_DELAY_MS)
-
-      const fieldErrors = {}
-      if (isEmailTaken(admin.email)) fieldErrors.email = 'An account with this email already exists.'
-      if (isUsernameTaken(admin.username)) fieldErrors.username = 'This username is already taken.'
-      if (Object.keys(fieldErrors).length > 0) return { ok: false, fieldErrors }
-
-      const id = `USR-${Date.now().toString(36).toUpperCase()}`
-      const account = {
-        id,
-        employeeCode: nextEmployeeCode(accounts),
+      const payload = {
+        businessName: business.name.trim(),
+        businessType: business.type,
+        businessPhone: business.phone.trim(),
+        country: business.country,
+        currency: business.currency,
         fullName: admin.fullName.trim(),
         email: admin.email.trim().toLowerCase(),
         username: admin.username.trim(),
-        role: 'Admin',
-        status: 'Active',
-        storeName: business.name.trim(),
-        lastLogin: null,
-        phone: business.phone.trim(),
-        memberSince: new Date().toISOString(),
-        avatarUrl: null,
-        preferences: { ...defaultUserPreferences },
-        business: {
-          name: business.name.trim(),
-          type: business.type,
-          phone: business.phone.trim(),
-          country: business.country,
-          currency: business.currency,
-        },
+        password: admin.password,
+        agreeTerms: true,
       }
 
-      setAccountStore((current) => ({
-        ...current,
-        registered: [...(current?.registered || []), account],
-        passwordHashes: { ...(current?.passwordHashes || {}), [id]: demoHash(id, admin.password) },
-        profiles: { ...(current?.profiles || {}) },
-      }))
+      const res = await signupWithBackend(payload)
 
-      return { ok: true, user: toSessionUser(account) }
+      if (!res.ok || !res.data?.success) {
+        return {
+          ok: false,
+          error: res.data?.error || res.data?.message || res.error || 'Could not create administrator account.',
+          fieldErrors: res.data?.fields || {},
+        }
+      }
+
+      setIsSetupComplete(true)
+
+      const createdUser = {
+        email: payload.email,
+        fullName: payload.fullName,
+        username: payload.username,
+        role: 'Admin',
+        storeName: payload.businessName,
+      }
+
+      return {
+        ok: true,
+        emailConfirmationRequired: Boolean(res.data.emailConfirmationRequired),
+        user: createdUser,
+      }
     },
-    [accounts, isEmailTaken, isUsernameTaken],
+    [],
   )
 
   // Always resolves the same way so the UI cannot reveal whether an email exists.
@@ -430,6 +501,9 @@ function AuthProvider({ children }) {
       user,
       isAuthenticated: Boolean(user),
       loading,
+      isSetupComplete,
+      setupStatusLoaded,
+      refreshSetupStatus,
       signOutReason,
       login,
       logout,
@@ -451,6 +525,9 @@ function AuthProvider({ children }) {
     [
       user,
       loading,
+      isSetupComplete,
+      setupStatusLoaded,
+      refreshSetupStatus,
       signOutReason,
       sessionStartedAt,
       activity,

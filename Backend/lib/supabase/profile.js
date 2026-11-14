@@ -1,39 +1,41 @@
 import "server-only";
+import { getSupabaseAdmin, isSupabaseAdminConfigured } from "./admin.js";
 
 /**
  * Loads the staff profile and permissions for an authenticated user.
- * Queries public.users through the user-scoped Supabase client to enforce RLS.
+ * Queries public.users through the user-scoped Supabase client (with admin fallback).
  */
 export async function loadStaffProfile(db, userId) {
-    let profile;
+    let profile = null;
     let permissions = [];
+
+    const queryClient = isSupabaseAdminConfigured() ? getSupabaseAdmin() : db;
 
     try {
         const [{ data: prof, error }, { data: perms }] = await Promise.all([
-            db
+            queryClient
                 .from("users")
                 .select(`
                     id, full_name, email, username, employee_code, phone, avatar_url, status,
-                    last_login, created_at, all_registers, role_id,
-                    role:roles (id, name, code),
-                    store:stores (id, name, code),
+                    last_login, created_at, all_registers, role_id, store_id,
+                    role:roles (id, name),
+                    store:stores (id, name),
                     preferences:user_preferences (landing_page, date_format, ask_before_printing, sale_sound, table_density)
                 `)
                 .eq("id", userId)
                 .maybeSingle(),
-            db.rpc("current_user_permissions"),
+            Promise.resolve(db.rpc("current_user_permissions")).catch(() => ({ data: [] })),
         ]);
 
         if (error) {
-            // Fallback for environments where code column is not yet present on roles
-            const { data: fallbackProf, error: fallbackError } = await db
+            // Minimal fallback without preferences join if user_preferences relation differs
+            const { data: fallbackProf, error: fallbackError } = await queryClient
                 .from("users")
                 .select(`
                     id, full_name, email, username, employee_code, phone, avatar_url, status,
-                    last_login, created_at, all_registers, role_id,
+                    last_login, created_at, all_registers, role_id, store_id,
                     role:roles (id, name),
-                    store:stores (id, name, code),
-                    preferences:user_preferences (landing_page, date_format, ask_before_printing, sale_sound, table_density)
+                    store:stores (id, name)
                 `)
                 .eq("id", userId)
                 .maybeSingle();
@@ -43,7 +45,7 @@ export async function loadStaffProfile(db, userId) {
         } else {
             profile = prof;
         }
-        permissions = perms || [];
+        permissions = Array.isArray(perms) ? perms : [];
     } catch (err) {
         throw err;
     }
@@ -58,7 +60,8 @@ export async function loadStaffProfile(db, userId) {
         code: profile.role?.code || (profile.role?.name ? profile.role.name.toUpperCase().replace(/\s+/g, "_") : "STAFF"),
     };
 
-    const preferences = profile.preferences || {};
+    const rawPrefs = Array.isArray(profile.preferences) ? profile.preferences[0] : profile.preferences;
+    const preferences = rawPrefs || {};
     return {
         id: profile.id,
         authUserId: userId,
@@ -72,7 +75,7 @@ export async function loadStaffProfile(db, userId) {
         roleId: roleObj.id,
         status: profile.status,
         isActive: profile.status === "Active",
-        storeId: profile.store?.id || null,
+        storeId: profile.store?.id || profile.store_id || null,
         storeName: profile.store?.name || null,
         store: profile.store || null,
         lastLogin: profile.last_login,

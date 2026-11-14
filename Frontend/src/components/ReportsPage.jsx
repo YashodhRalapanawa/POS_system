@@ -1,32 +1,105 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import Button from './ui/Button'
 import Card from './ui/Card'
 import Badge from './ui/Badge'
-import { reportData, dateRangeOptions } from '../data/mockReports'
+import { dateRangeOptions } from '../data/mockReports'
+import { getDailySales } from '../services/api'
+import { useCurrency } from '../context/CurrencyContext'
 
-function formatCurrency(value) {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-  }).format(value)
+const defaultReport = {
+  totalSales: 0,
+  transactions: 0,
+  salesTrend: [
+    { label: 'Mon', value: 0 },
+    { label: 'Tue', value: 0 },
+    { label: 'Wed', value: 0 },
+    { label: 'Thu', value: 0 },
+    { label: 'Fri', value: 0 },
+    { label: 'Sat', value: 0 },
+    { label: 'Sun', value: 0 },
+  ],
+  paymentMethods: [
+    { label: 'Cash', amount: 0, count: 0 },
+    { label: 'Card', amount: 0, count: 0 },
+    { label: 'Bank Transfer', amount: 0, count: 0 },
+    { label: 'Other', amount: 0, count: 0 },
+  ],
+  topProducts: [],
+  inventoryMovement: {
+    received: 0,
+    sold: 0,
+    returned: 0,
+    adjustments: 0,
+  },
+  returnsSummary: {
+    totalReturns: 0,
+    completedReturns: 0,
+    pendingReturns: 0,
+    refundValue: 0,
+  },
 }
 
 function formatNumber(value) {
-  return new Intl.NumberFormat('en-US').format(value)
+  return new Intl.NumberFormat('en-US').format(value || 0)
 }
 
 function ReportsPage() {
+  const { formatCurrency } = useCurrency()
   const [selectedRange, setSelectedRange] = useState('Today')
+  const [currentReport, setCurrentReport] = useState(defaultReport)
+  const [loading, setLoading] = useState(true)
 
-  const rangeKeyMap = {
-    Today: 'today',
-    Yesterday: 'yesterday',
-    'Last 7 Days': 'last7Days',
-    'Last 30 Days': 'last30Days',
-    'This Month': 'thisMonth',
-  }
+  useEffect(() => {
+    let isMounted = true
+    setLoading(true)
 
-  const currentReport = reportData[rangeKeyMap[selectedRange]] || reportData.today
+    getDailySales()
+      .then((res) => {
+        if (!isMounted) return
+        if (res?.ok && res.data?.success && res.data.data?.report) {
+          const rep = res.data.data.report
+          setCurrentReport({
+            totalSales: rep.summary?.totalSales || 0,
+            transactions: rep.summary?.transactionCount || 0,
+            salesTrend: [
+              { label: 'Mon', value: 0 },
+              { label: 'Tue', value: 0 },
+              { label: 'Wed', value: 0 },
+              { label: 'Thu', value: 0 },
+              { label: 'Fri', value: 0 },
+              { label: 'Sat', value: 0 },
+              { label: 'Sun', value: rep.summary?.totalSales || 0 },
+            ],
+            paymentMethods: rep.paymentMethods || defaultReport.paymentMethods,
+            topProducts: rep.topProducts || [],
+            inventoryMovement: {
+              received: 0,
+              sold: rep.summary?.transactionCount || 0,
+              returned: rep.returns?.totalCount || 0,
+              adjustments: 0,
+            },
+            returnsSummary: {
+              totalReturns: rep.returns?.totalCount || 0,
+              completedReturns: rep.returns?.completedCount || 0,
+              pendingReturns: rep.returns?.pendingCount || 0,
+              refundValue: rep.returns?.refundValue || 0,
+            },
+          })
+        } else {
+          setCurrentReport(defaultReport)
+        }
+      })
+      .catch(() => {
+        if (isMounted) setCurrentReport(defaultReport)
+      })
+      .finally(() => {
+        if (isMounted) setLoading(false)
+      })
+
+    return () => {
+      isMounted = false
+    }
+  }, [selectedRange])
 
   const averageTransaction = useMemo(
     () => (currentReport.transactions > 0 ? currentReport.totalSales / currentReport.transactions : 0),
@@ -34,8 +107,11 @@ function ReportsPage() {
   )
 
   const highestSalesDay = useMemo(() => {
+    if (!currentReport.salesTrend || currentReport.salesTrend.length === 0) {
+      return { label: '—', value: 0 }
+    }
     const trendValue = currentReport.salesTrend.reduce((max, item) => (item.value > max.value ? item : max), currentReport.salesTrend[0])
-    return trendValue
+    return trendValue || { label: '—', value: 0 }
   }, [currentReport])
 
   const totalPaymentAmount = currentReport.paymentMethods.reduce((sum, item) => sum + Number(item.amount), 0)
@@ -130,8 +206,8 @@ function ReportsPage() {
           <div className="sales-performance">
             <div className="sales-performance__bars" aria-label="Sales trend chart">
               {currentReport.salesTrend.map((point) => {
-                const maxValue = Math.max(...currentReport.salesTrend.map((item) => item.value))
-                const height = Math.max((point.value / maxValue) * 100, 12)
+                const maxValue = Math.max(...currentReport.salesTrend.map((item) => item.value), 1)
+                const height = point.value > 0 ? Math.max((point.value / maxValue) * 100, 12) : 6
 
                 return (
                   <div key={point.label} className="sales-performance__bar-wrap">
@@ -203,19 +279,27 @@ function ReportsPage() {
                 </tr>
               </thead>
               <tbody>
-                {currentReport.topProducts.map((product) => {
-                  const averagePrice = product.unitsSold > 0 ? product.revenue / product.unitsSold : 0
+                {currentReport.topProducts.length === 0 ? (
+                  <tr>
+                    <td colSpan="5" style={{ textAlign: 'center', padding: '2rem', color: '#64748b' }}>
+                      No sales recorded for this period yet.
+                    </td>
+                  </tr>
+                ) : (
+                  currentReport.topProducts.map((product) => {
+                    const averagePrice = product.unitsSold > 0 ? product.revenue / product.unitsSold : 0
 
-                  return (
-                    <tr key={product.sku}>
-                      <td>{product.name}</td>
-                      <td>{product.sku}</td>
-                      <td>{formatNumber(product.unitsSold)}</td>
-                      <td>{formatCurrency(product.revenue)}</td>
-                      <td>{formatCurrency(averagePrice)}</td>
-                    </tr>
-                  )
-                })}
+                    return (
+                      <tr key={product.sku || product.name}>
+                        <td>{product.name}</td>
+                        <td>{product.sku || '—'}</td>
+                        <td>{formatNumber(product.unitsSold)}</td>
+                        <td>{formatCurrency(product.revenue)}</td>
+                        <td>{formatCurrency(averagePrice)}</td>
+                      </tr>
+                    )
+                  })
+                )}
               </tbody>
             </table>
           </div>

@@ -55,7 +55,7 @@ export async function PATCH(request, context) {
             .select(`
                 id, full_name, email, username, employee_code, phone, avatar_url, status,
                 all_registers, role_id, store_id, business_id,
-                role:roles (id, name, code)
+                role:roles (id, name)
             `)
             .eq("id", targetUserId)
             .maybeSingle();
@@ -152,16 +152,25 @@ export async function PATCH(request, context) {
             }
 
             // Resolve target role
-            let roleQuery = admin.from("roles").select("id, name, code, is_active");
+            let roleQuery = admin.from("roles").select("id, name");
             const parsedRoleId = Number(rawRoleId);
 
             if (Number.isInteger(parsedRoleId) && parsedRoleId > 0) {
                 roleQuery = roleQuery.eq("id", parsedRoleId);
             } else if (typeof rawRoleId === "string" && rawRoleId.trim()) {
-                roleQuery = roleQuery.or(`id.eq.${rawRoleId},code.ilike.${rawRoleId.toUpperCase()},name.ilike.${rawRoleId}`);
+                const cleanStr = rawRoleId.trim();
+                const normalizedName =
+                    cleanStr.toUpperCase() === "ADMIN" || cleanStr.toUpperCase() === "ADMINISTRATOR"
+                        ? "Admin"
+                        : cleanStr;
+                roleQuery = roleQuery.ilike("name", normalizedName);
             } else if (rawRole) {
                 const roleName = String(rawRole).trim();
-                roleQuery = roleQuery.or(`name.ilike.${roleName},code.ilike.${roleName.toUpperCase()}`);
+                const normalizedName =
+                    roleName.toUpperCase() === "ADMIN" || roleName.toUpperCase() === "ADMINISTRATOR"
+                        ? "Admin"
+                        : roleName;
+                roleQuery = roleQuery.ilike("name", normalizedName);
             }
 
             const { data: newRoleRow, error: roleErr } = await roleQuery.maybeSingle();
@@ -173,25 +182,28 @@ export async function PATCH(request, context) {
                 );
             }
 
-            if (newRoleRow.is_active === false) {
-                return Response.json(
-                    { success: false, message: "Cannot assign an inactive role." },
-                    { status: 400 }
-                );
-            }
-
             // Step 5: Administrator Protection
             const currentRoleName = currentStaff.role?.name || "";
-            const currentRoleCode = currentStaff.role?.code || "";
-            const isCurrentlyAdmin = currentRoleName === "Admin" || currentRoleCode === "ADMIN";
-            const willBeAdmin = newRoleRow.name === "Admin" || newRoleRow.code === "ADMIN";
+            const isCurrentlyAdmin =
+                currentRoleName.toLowerCase() === "admin" ||
+                currentRoleName.toLowerCase() === "administrator";
+            const willBeAdmin =
+                (newRoleRow.name || "").toLowerCase() === "admin" ||
+                (newRoleRow.name || "").toLowerCase() === "administrator";
 
             if (isCurrentlyAdmin && !willBeAdmin) {
+                if (String(auth.user.id) === String(targetUserId)) {
+                    return Response.json(
+                        { success: false, message: "You cannot demote your own Administrator account." },
+                        { status: 400 }
+                    );
+                }
+
                 // Check remaining active administrators
                 const { data: adminRoles } = await admin
                     .from("roles")
                     .select("id")
-                    .or("name.eq.Admin,code.eq.ADMIN");
+                    .ilike("name", "Admin");
 
                 const adminRoleIds = (adminRoles || []).map((r) => r.id);
 
@@ -225,7 +237,7 @@ export async function PATCH(request, context) {
         if (rawStoreId !== undefined) {
             const { data: storeRow, error: storeErr } = await admin
                 .from("stores")
-                .select("id, is_active")
+                .select("id, name")
                 .eq("id", rawStoreId)
                 .maybeSingle();
 
@@ -276,14 +288,22 @@ export async function PATCH(request, context) {
         }
 
         if (updates.status === "Inactive" && currentStaff.status !== "Inactive") {
+            if (String(auth.user.id) === String(targetUserId)) {
+                return Response.json(
+                    { success: false, message: "You cannot deactivate your own account." },
+                    { status: 400 }
+                );
+            }
+
             const currentRoleName = currentStaff.role?.name || "";
-            const currentRoleCode = currentStaff.role?.code || "";
-            const isCurrentlyAdmin = currentRoleName === "Admin" || currentRoleCode === "ADMIN";
+            const isCurrentlyAdmin =
+                currentRoleName.toLowerCase() === "admin" ||
+                currentRoleName.toLowerCase() === "administrator";
             if (isCurrentlyAdmin) {
                 const { data: adminRoles } = await admin
                     .from("roles")
                     .select("id")
-                    .or("name.eq.Admin,code.eq.ADMIN");
+                    .ilike("name", "Admin");
 
                 const adminRoleIds = (adminRoles || []).map((r) => r.id);
 
@@ -310,8 +330,8 @@ export async function PATCH(request, context) {
             .select(`
                 id, full_name, email, username, employee_code, phone, avatar_url, status,
                 all_registers, last_login, created_at, role_id, store_id,
-                role:roles (id, name, code),
-                store:stores (id, name, code)
+                role:roles (id, name),
+                store:stores (id, name)
             `)
             .maybeSingle();
 
@@ -332,17 +352,18 @@ export async function PATCH(request, context) {
             }
         }
 
+        const resolvedRoleName = updatedStaff.role?.name || "Staff";
         const roleObj = {
             id: updatedStaff.role?.id ?? updatedStaff.role_id,
-            name: updatedStaff.role?.name || "Staff",
-            code: updatedStaff.role?.code || "STAFF",
+            name: resolvedRoleName,
+            code: resolvedRoleName.toUpperCase().replace(/\s+/g, "_"),
         };
 
         const storeObj = updatedStaff.store
             ? {
                   id: updatedStaff.store.id,
                   name: updatedStaff.store.name,
-                  code: updatedStaff.store.code || null,
+                  code: null,
               }
             : null;
 

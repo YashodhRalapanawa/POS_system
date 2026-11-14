@@ -24,6 +24,8 @@ function formatOrderResponse(order, items = [], customer = null, cashier = null,
     }));
 
     const itemCount = formattedItems.reduce((acc, curr) => acc + curr.quantity, 0);
+    const rawStatus = String(order.status || "Pending").toLowerCase();
+    const normalizedStatus = (rawStatus === "pending" || rawStatus === "held") ? "draft" : rawStatus;
 
     return {
         id: order.id,
@@ -56,9 +58,14 @@ function formatOrderResponse(order, items = [], customer = null, cashier = null,
             username: cash.username || "",
             employeeCode: cash.employee_code || "",
         } : null,
-        status: String(order.status || "draft").toLowerCase(),
-        currencyCode: order.currency_code || order.currency || "USD",
-        currency: order.currency_code || order.currency || "USD",
+        status: normalizedStatus,
+        rawStatus: order.status || "Pending",
+        currencyCode: order.currency_code || order.currency || "LKR",
+        currency: order.currency_code || order.currency || "LKR",
+        discountType: order.discount_type || "none",
+        discountValue: Number(order.discount_value || 0),
+        discountAmount: Number(order.discount_amount || 0),
+        taxAmount: Number(order.tax_amount || 0),
         subtotal: Number(order.subtotal || 0),
         totalAmount: Number(order.total_amount || order.subtotal || 0),
         total: Number(order.total_amount || order.subtotal || 0),
@@ -66,7 +73,7 @@ function formatOrderResponse(order, items = [], customer = null, cashier = null,
         createdAt: order.created_at,
         updatedAt: order.updated_at,
         completedAt: order.completed_at || null,
-        completedBy: order.completed_by || null,
+        completedBy: order.completed_by || order.cashier_user_id || null,
         itemCount,
         items: formattedItems,
     };
@@ -108,8 +115,7 @@ export async function GET(request, { params }) {
             .from("orders")
             .select(`
                 id, order_number, store_id, customer_id, cashier_user_id,
-                currency_code, currency,
-                status, subtotal, total_amount, notes, created_at, updated_at, completed_at, completed_by,
+                status, discount_type, discount_value, subtotal, discount_amount, tax_amount, total_amount, notes, created_at, updated_at, completed_at,
                 customer:customers (id, name, code, phone, email, is_walk_in),
                 cashier:users (id, full_name, username, employee_code),
                 store:stores (id, name, code),
@@ -213,9 +219,9 @@ export async function PATCH(request, { params }) {
             return errorResponse("You do not have access to edit orders from this store.", 403);
         }
 
-        // Only draft orders are editable
+        // Only draft/pending/held orders are editable
         const currentStatus = String(existingOrder.status || "").toLowerCase();
-        if (currentStatus !== "draft") {
+        if (!["draft", "pending", "held"].includes(currentStatus)) {
             return errorResponse(
                 `Only draft orders can be edited. This order is currently in "${existingOrder.status}" status.`,
                 400
@@ -381,12 +387,16 @@ export async function PATCH(request, { params }) {
             }
 
             let subtotalAcc = 0;
+            let taxAcc = 0;
             newItemsPayload = cleanedItems.map((item) => {
                 const prod = productMap.get(item.productId);
                 const unitPrice = Math.round(Number(prod.selling_price || 0) * 100) / 100;
                 const unitCost = Math.round(Number(prod.purchase_price || 0) * 100) / 100;
                 const lineSubtotal = Math.round(item.quantity * unitPrice * 100) / 100;
+                const taxRate = Number(prod.tax_rate || 0);
+                const lineTax = Math.round(lineSubtotal * (taxRate / 100) * 100) / 100;
                 subtotalAcc += lineSubtotal;
+                taxAcc += lineTax;
 
                 return {
                     store_id: storeId,
@@ -398,10 +408,9 @@ export async function PATCH(request, { params }) {
                     unit_price: unitPrice,
                     unit_cost: unitCost,
                     discount_amount: 0,
-                    tax_rate: Number(prod.tax_rate || 0),
-                    tax_amount: 0,
+                    tax_rate: taxRate,
+                    tax_amount: lineTax,
                     line_total: lineSubtotal,
-                    updated_at: new Date().toISOString(),
                 };
             });
 
@@ -410,42 +419,27 @@ export async function PATCH(request, { params }) {
 
         const updatedNotes = body.notes !== undefined ? String(body.notes || "").trim() : existingOrder.notes;
 
-        // Try RPC first for atomic update
-        const { data: rpcRes, error: rpcErr } = await admin.rpc("update_pos_draft_order", {
-            p_order_id: orderId,
-            p_store_id: storeId,
-            p_customer_id: updatedCustomerId,
-            p_items: Array.isArray(body.items) ? body.items.map((it) => ({
-                productId: it.productId || it.product_id,
-                quantity: it.quantity,
-            })) : null,
-            p_notes: updatedNotes,
-        });
-
-        if (rpcErr || !rpcRes?.success) {
-            // Direct fallback atomic update
-            if (newItemsPayload) {
-                await admin.from("order_items").delete().eq("order_id", orderId);
-                const { error: insertItemsErr } = await admin.from("order_items").insert(newItemsPayload);
-                if (insertItemsErr) {
-                    return errorResponse(`Failed to update order items: ${insertItemsErr.message}`, 500);
-                }
+        if (newItemsPayload) {
+            await admin.from("order_items").delete().eq("order_id", orderId);
+            const { error: insertItemsErr } = await admin.from("order_items").insert(newItemsPayload);
+            if (insertItemsErr) {
+                return errorResponse(`Failed to update order items: ${insertItemsErr.message}`, 500);
             }
+        }
 
-            const { error: headerUpdateErr } = await admin
-                .from("orders")
-                .update({
-                    customer_id: updatedCustomerId,
-                    subtotal: calculatedSubtotal,
-                    total_amount: calculatedSubtotal,
-                    notes: updatedNotes,
-                    updated_at: new Date().toISOString(),
-                })
-                .eq("id", orderId);
+        const { error: headerUpdateErr } = await admin
+            .from("orders")
+            .update({
+                customer_id: updatedCustomerId,
+                subtotal: calculatedSubtotal,
+                total_amount: calculatedSubtotal,
+                notes: updatedNotes,
+                updated_at: new Date().toISOString(),
+            })
+            .eq("id", orderId);
 
-            if (headerUpdateErr) {
-                return errorResponse(`Failed to update order header: ${headerUpdateErr.message}`, 500);
-            }
+        if (headerUpdateErr) {
+            return errorResponse(`Failed to update order header: ${headerUpdateErr.message}`, 500);
         }
 
         // Retrieve and return refreshed order
@@ -453,7 +447,7 @@ export async function PATCH(request, { params }) {
             .from("orders")
             .select(`
                 id, order_number, store_id, customer_id, cashier_user_id,
-                status, subtotal, total_amount, notes, created_at, updated_at, completed_at, completed_by,
+                status, discount_type, discount_value, subtotal, discount_amount, tax_amount, total_amount, notes, created_at, updated_at, completed_at,
                 customer:customers (id, name, code, phone, email, is_walk_in),
                 cashier:users (id, full_name, username, employee_code),
                 store:stores (id, name, code),

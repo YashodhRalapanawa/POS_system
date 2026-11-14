@@ -130,7 +130,7 @@ export async function POST(request) {
             .select("id")
             .eq("product_id", productId)
             .eq("store_id", storeId)
-            .in("adjustment_type", ["Opening Stock", "Set Stock Level"])
+            .in("adjustment_type", ["Set Stock Level", "Add Stock"])
             .limit(1)
             .maybeSingle();
 
@@ -148,7 +148,7 @@ export async function POST(request) {
         const movementPayload = {
             store_id: storeId,
             product_id: productId,
-            adjustment_type: "Opening Stock",
+            adjustment_type: "Set Stock Level",
             reason: "Stock Count",
             notes: reason || "Initial stock entry",
             quantity,

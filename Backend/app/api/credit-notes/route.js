@@ -134,59 +134,35 @@ export async function POST(request) {
             return errorResponse("Return record not found.", 404);
         }
 
-        // Check if credit note already exists
-        const { data: existingCn } = await admin
-            .from("credit_notes")
-            .select(`
-                *,
-                customer:customers (id, name, code),
-                credit_note_items (*)
-            `)
-            .eq("return_id", rawReturn.id)
-            .maybeSingle();
-
-        if (existingCn) {
-            return successResponse(
-                { creditNote: formatCreditNoteResponse(existingCn, { items: existingCn.credit_note_items, customer: existingCn.customer }), isDuplicate: true },
-                `Credit note ${existingCn.credit_note_number} already exists for this return`,
-                200
-            );
-        }
-
         const cnNumber = `CN-${rawReturn.return_number?.replace(/^RET-?/i, "") || Date.now().toString().slice(-6)}`;
         const nowIso = new Date().toISOString();
 
-        const { data: newCn, error: cnErr } = await admin
-            .from("credit_notes")
-            .insert({
-                store_id: rawReturn.store_id,
-                return_id: rawReturn.id,
-                invoice_id: rawReturn.invoice_id || null,
-                order_id: rawReturn.order_id,
-                customer_id: rawReturn.customer_id,
-                credit_note_number: cnNumber,
-                issue_date: nowIso,
-                reason: body.reason || rawReturn.reason,
-                refund_method: body.refundMethod || rawReturn.refund_method,
-                subtotal: rawReturn.subtotal,
-                tax_amount: rawReturn.tax_amount,
-                total_amount: rawReturn.refund_amount,
-                remaining_amount: rawReturn.refund_amount,
-                status: "Issued",
-                notes: body.notes || `Credit note for return ${rawReturn.return_number}`,
-                issued_by: auth.user.id,
-            })
-            .select("*")
-            .single();
-
-        if (cnErr || !newCn) {
-            return errorResponse(`Failed to create credit note: ${cnErr?.message || "Unknown error"}`, 500);
-        }
-
-        // Insert items
-        const cnItems = (ret.items || []).map((it) => ({
+        const virtualCn = {
+            id: rawReturn.id,
+            credit_note_number: cnNumber,
             store_id: rawReturn.store_id,
-            credit_note_id: newCn.id,
+            return_id: rawReturn.id,
+            invoice_id: null,
+            order_id: rawReturn.order_id,
+            customer_id: rawReturn.customer_id,
+            issue_date: rawReturn.completed_at || nowIso,
+            reason: body.reason || rawReturn.reason,
+            refund_method: body.refundMethod || rawReturn.refund_method,
+            subtotal: rawReturn.subtotal,
+            tax_amount: rawReturn.tax_amount,
+            total_amount: rawReturn.refund_amount,
+            remaining_amount: rawReturn.refund_amount,
+            status: "Issued",
+            notes: body.notes || `Credit note for return ${rawReturn.return_number}`,
+            issued_by: auth.user.id,
+            created_at: rawReturn.completed_at || nowIso,
+            updated_at: nowIso,
+        };
+
+        const cnItems = (ret.items || []).map((it) => ({
+            id: it.id,
+            store_id: rawReturn.store_id,
+            credit_note_id: rawReturn.id,
             return_item_id: it.id,
             order_item_id: it.orderItemId,
             product_id: it.productId,
@@ -199,11 +175,16 @@ export async function POST(request) {
             line_total: it.refundAmount,
         }));
 
-        await admin.from("credit_note_items").insert(cnItems);
-
         return successResponse(
-            { creditNote: formatCreditNoteResponse(newCn, { items: cnItems, customer: ret.customer }) },
-            `Credit note ${newCn.credit_note_number} issued successfully`,
+            {
+                creditNote: formatCreditNoteResponse(virtualCn, {
+                    items: cnItems,
+                    customer: ret.customer,
+                    returnNumber: rawReturn.return_number,
+                    orderNumber: ret.orderNumber,
+                }),
+            },
+            `Credit note ${cnNumber} issued successfully`,
             201
         );
     } catch (err) {

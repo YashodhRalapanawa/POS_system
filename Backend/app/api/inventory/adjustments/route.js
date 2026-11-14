@@ -146,12 +146,16 @@ export async function POST(request) {
             );
         }
 
+        // Normalize reason to satisfy stock_movements_reason_check constraint
+        const ALLOWED_REASONS = ["Stock Count", "Damaged", "Lost", "Found", "Manual Correction", "Other"];
+        const matchedReason = ALLOWED_REASONS.find((r) => r.toLowerCase() === reason.toLowerCase()) || "Manual Correction";
+
         // Insert stock movement record (trigger apply_stock_movement handles atomic inventory lock & update)
         const movementPayload = {
             store_id: storeId,
             product_id: productId,
             adjustment_type: adjustmentType,
-            reason: reason,
+            reason: matchedReason,
             notes: reason,
             quantity,
             reference_type: "adjustment",

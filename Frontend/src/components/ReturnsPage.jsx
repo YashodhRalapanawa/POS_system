@@ -1,19 +1,14 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import Button from './ui/Button'
 import Card from './ui/Card'
 import Badge from './ui/Badge'
 import ReturnDetailsModal from './ReturnDetailsModal'
 import NewReturnModal from './NewReturnModal'
-import { initialReturns, returnStatusOptions, refundMethodOptions, returnReasonOptions, returnDateOptions } from '../data/mockReturns'
+import { returnStatusOptions, refundMethodOptions, returnReasonOptions, returnDateOptions } from '../data/mockReturns'
+import { getReturns, createReturn, updateReturnStatus } from '../services/api'
+import { useCurrency } from '../context/CurrencyContext'
 import { paths } from '../routes'
-
-function formatCurrency(value) {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-  }).format(value)
-}
 
 function formatDate(value) {
   if (!value) return '—'
@@ -27,7 +22,9 @@ function formatDate(value) {
 
 function ReturnsPage() {
   const navigate = useNavigate()
-  const [returns, setReturns] = useState(initialReturns)
+  const { formatCurrency } = useCurrency()
+  const [returns, setReturns] = useState([])
+  const [isLoading, setIsLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('All Status')
   const [refundMethodFilter, setRefundMethodFilter] = useState('All Refund Methods')
@@ -37,6 +34,32 @@ function ReturnsPage() {
   const [moreReturnId, setMoreReturnId] = useState(null)
   const [isNewReturnOpen, setIsNewReturnOpen] = useState(false)
   const [successMessage, setSuccessMessage] = useState('')
+
+  useEffect(() => {
+    let isMounted = true
+    setIsLoading(true)
+
+    getReturns({ all: true })
+      .then((res) => {
+        if (!isMounted) return
+        if (res?.ok && res.data?.success) {
+          const list = res.data.data?.returns || res.data.returns || []
+          setReturns(list)
+        } else {
+          setReturns([])
+        }
+      })
+      .catch(() => {
+        if (isMounted) setReturns([])
+      })
+      .finally(() => {
+        if (isMounted) setIsLoading(false)
+      })
+
+    return () => {
+      isMounted = false
+    }
+  }, [])
 
   const filteredReturns = useMemo(() => {
     return returns.filter((entry) => {
@@ -81,37 +104,61 @@ function ReturnsPage() {
   const selectedReturn = returns.find((entry) => entry.id === selectedReturnId) ?? null
   const moreReturn = returns.find((entry) => entry.id === moreReturnId) ?? null
 
-  const handleCreateReturn = (newEntry) => {
-    const returnId = `RET-${new Date().getFullYear()}-${String(returns.length + 1).padStart(3, '0')}`
-    const entry = {
-      ...newEntry,
-      id: returnId,
-      status: 'Pending',
+  const handleCreateReturn = async (newEntry) => {
+    try {
+      const res = await createReturn(newEntry)
+      if (res?.ok && res.data?.success) {
+        const created = res.data.data?.return || res.data.return
+        if (created) {
+          setReturns((currentReturns) => [created, ...currentReturns])
+          setSuccessMessage(`Return ${created.returnNumber || created.id} created successfully.`)
+          setIsNewReturnOpen(false)
+          return
+        }
+      }
+      const errMsg = res?.data?.message || res?.error || 'Failed to create return.'
+      setSuccessMessage(`Error: ${errMsg}`)
+    } catch (err) {
+      setSuccessMessage(`Error: ${err.message || 'Failed to create return.'}`)
     }
-
-    setReturns((currentReturns) => [entry, ...currentReturns])
-    setSuccessMessage(`Return ${returnId} created successfully.`)
-    setIsNewReturnOpen(false)
   }
 
-  const handleApproveReturn = (returnId) => {
-    setReturns((currentReturns) =>
-      currentReturns.map((entry) => (entry.id === returnId && entry.status === 'Pending' ? { ...entry, status: 'Approved' } : entry)),
-    )
+  const handleApproveReturn = async (returnId) => {
+    const target = returns.find((r) => r.id === returnId)
+    const apiId = target?.returnId || returnId
+    const res = await updateReturnStatus(apiId, { status: 'Approved' })
+    if (res?.ok && res.data?.success) {
+      const updated = res.data.data?.return || res.data.return
+      setReturns((currentReturns) =>
+        currentReturns.map((entry) => (entry.id === returnId ? (updated || { ...entry, status: 'Approved' }) : entry)),
+      )
+    }
     setMoreReturnId(null)
   }
 
-  const handleRejectReturn = (returnId) => {
-    setReturns((currentReturns) =>
-      currentReturns.map((entry) => (entry.id === returnId && entry.status === 'Pending' ? { ...entry, status: 'Rejected' } : entry)),
-    )
+  const handleRejectReturn = async (returnId) => {
+    const target = returns.find((r) => r.id === returnId)
+    const apiId = target?.returnId || returnId
+    const res = await updateReturnStatus(apiId, { status: 'Rejected', rejectionReason: 'Rejected by staff' })
+    if (res?.ok && res.data?.success) {
+      const updated = res.data.data?.return || res.data.return
+      setReturns((currentReturns) =>
+        currentReturns.map((entry) => (entry.id === returnId ? (updated || { ...entry, status: 'Rejected' }) : entry)),
+      )
+    }
     setMoreReturnId(null)
   }
 
-  const handleProcessReturn = (returnId) => {
-    setReturns((currentReturns) =>
-      currentReturns.map((entry) => (entry.id === returnId && entry.status === 'Approved' ? { ...entry, status: 'Completed' } : entry)),
-    )
+  const handleProcessReturn = async (returnId) => {
+    const target = returns.find((r) => r.id === returnId)
+    const apiId = target?.returnId || returnId
+    const res = await updateReturnStatus(apiId, { status: 'Completed' })
+    if (res?.ok && res.data?.success) {
+      const updated = res.data.data?.return || res.data.return
+      setReturns((currentReturns) =>
+        currentReturns.map((entry) => (entry.id === returnId ? (updated || { ...entry, status: 'Completed' }) : entry)),
+      )
+    }
     setMoreReturnId(null)
   }
 
@@ -214,7 +261,13 @@ function ReturnsPage() {
             </thead>
 
             <tbody>
-              {filteredReturns.length === 0 ? (
+              {isLoading ? (
+                <tr>
+                  <td colSpan="10" style={{ textAlign: 'center', padding: '2.5rem' }}>
+                    Loading returns...
+                  </td>
+                </tr>
+              ) : filteredReturns.length === 0 ? (
                 <tr>
                   <td colSpan="10">
                     <div className="inventory-empty-state">
@@ -225,7 +278,7 @@ function ReturnsPage() {
                 </tr>
               ) : (
                 filteredReturns.map((entry) => {
-                  const returnedQuantity = entry.items.reduce((total, item) => total + Number(item.quantity || 0), 0)
+                  const returnedQuantity = (entry.items || []).reduce((total, item) => total + Number(item.quantity || 0), 0)
 
                   return (
                     <tr key={entry.id}>

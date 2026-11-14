@@ -158,14 +158,14 @@ function SettingsPage() {
         currencyCode: draftCountryCurrency.currencyCode,
       })
 
-      if (res && res.success) {
-        const data = res.data || res
+      const payload = res?.data?.data || res?.data || res
+      if (res?.ok && (res?.data?.success || payload?.currencyCode)) {
         const savedMeta = {
-          countryCode: data.countryCode || draftCountryCurrency.countryCode,
-          countryName: data.countryName || draftCountryCurrency.countryName,
-          currencyCode: data.currencyCode || draftCountryCurrency.currencyCode,
-          currencyName: data.currencyName || draftCountryCurrency.currencyName,
-          currencySymbol: data.currencySymbol || draftCountryCurrency.currencySymbol,
+          countryCode: payload.countryCode || draftCountryCurrency.countryCode,
+          countryName: payload.countryName || draftCountryCurrency.countryName,
+          currencyCode: payload.currencyCode || draftCountryCurrency.currencyCode,
+          currencyName: payload.currencyName || draftCountryCurrency.currencyName,
+          currencySymbol: payload.currencySymbol || draftCountryCurrency.currencySymbol,
         }
         setActiveCountryCurrency(savedMeta)
         setDraftCountryCurrency(savedMeta)
@@ -178,7 +178,7 @@ function SettingsPage() {
       } else {
         setCurrencyStatusMessage({
           type: 'error',
-          text: res?.message || 'Failed to update country and currency settings.',
+          text: res?.data?.message || res?.error || res?.message || 'Failed to update country and currency settings.',
         })
       }
     } catch (err) {

@@ -66,33 +66,28 @@ export async function getCreditNotesList(admin, {
     const offset = (page - 1) * limit;
 
     let query = admin
-        .from("credit_notes")
+        .from("returns")
         .select(`
             *,
             customer:customers (id, name, code, phone, email),
-            return:returns (id, return_number, status),
-            invoice:invoices (id, invoice_number),
             order:orders (id, order_number),
-            credit_note_items (*)
-        `, { count: "exact" });
+            return_items (*)
+        `, { count: "exact" })
+        .eq("status", "Completed");
 
     if (storeId) {
         query = query.eq("store_id", storeId);
     }
 
-    if (status && status !== "All" && status !== "All Status") {
-        query = query.ilike("status", status);
-    }
-
     if (search) {
         const clean = search.replace(/[%_,]/g, "");
         if (clean) {
-            query = query.or(`credit_note_number.ilike.%${clean}%,notes.ilike.%${clean}%`);
+            query = query.or(`return_number.ilike.%${clean}%,notes.ilike.%${clean}%`);
         }
     }
 
     query = query
-        .order("issue_date", { ascending: false })
+        .order("completed_at", { ascending: false })
         .range(offset, offset + limit - 1);
 
     const { data: rows, count, error } = await query;
@@ -100,15 +95,41 @@ export async function getCreditNotesList(admin, {
         return { creditNotes: [], total: 0, error };
     }
 
-    const formatted = (rows || []).map((cn) =>
-        formatCreditNoteResponse(cn, {
-            customer: cn.customer,
-            returnNumber: cn.return?.return_number,
-            invoiceNumber: cn.invoice?.invoice_number,
-            orderNumber: cn.order?.order_number,
-            items: cn.credit_note_items,
-        })
-    );
+    const formatted = (rows || []).map((ret) => {
+        const cnNumber = `CN-${String(ret.return_number || "").replace(/^RET-?/i, "")}`;
+        return formatCreditNoteResponse(
+            {
+                id: ret.id,
+                credit_note_number: cnNumber,
+                store_id: ret.store_id,
+                return_id: ret.id,
+                invoice_id: null,
+                order_id: ret.order_id,
+                customer_id: ret.customer_id,
+                issue_date: ret.completed_at || ret.created_at,
+                reason: ret.reason,
+                refund_method: ret.refund_method,
+                subtotal: ret.subtotal,
+                tax_amount: ret.tax_amount,
+                total_amount: ret.refund_amount,
+                remaining_amount: ret.refund_amount,
+                status: "Issued",
+                notes: ret.notes,
+                issued_by: ret.processed_by || ret.requested_by,
+                created_at: ret.completed_at || ret.created_at,
+                updated_at: ret.updated_at,
+            },
+            {
+                customer: ret.customer,
+                returnNumber: ret.return_number,
+                orderNumber: ret.order?.order_number,
+                items: (ret.return_items || []).map((ri) => ({
+                    ...ri,
+                    line_total: roundCurrency(Number(ri.refund_amount || 0) + Number(ri.tax_amount || 0)),
+                })),
+            }
+        );
+    });
 
     return {
         creditNotes: formatted,
@@ -118,41 +139,68 @@ export async function getCreditNotesList(admin, {
 }
 
 /**
- * Retrieves a single credit note by ID or credit_note_number.
+ * Retrieves a single credit note by ID, return_number, or credit_note_number.
  */
 export async function getCreditNoteById(admin, idOrNumber, storeId = null) {
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idOrNumber);
-    const col = isUuid ? "id" : "credit_note_number";
+    const normalizedParam = isUuid
+        ? idOrNumber
+        : String(idOrNumber).replace(/^CN-?/i, "RET-");
+    const col = isUuid ? "id" : "return_number";
 
     let query = admin
-        .from("credit_notes")
+        .from("returns")
         .select(`
             *,
             customer:customers (id, name, code, phone, email, address, city, country),
-            return:returns (id, return_number, status, reason, refund_method),
-            invoice:invoices (id, invoice_number),
             order:orders (id, order_number),
-            credit_note_items (*)
+            return_items (*)
         `)
-        .eq(col, idOrNumber);
+        .eq(col, normalizedParam);
 
     if (storeId) {
         query = query.eq("store_id", storeId);
     }
 
-    const { data: cn, error } = await query.maybeSingle();
-    if (error || !cn) {
+    const { data: ret, error } = await query.maybeSingle();
+    if (error || !ret) {
         return { creditNote: null, error: error || "Credit note not found" };
     }
 
+    const cnNumber = `CN-${String(ret.return_number || "").replace(/^RET-?/i, "")}`;
     return {
-        creditNote: formatCreditNoteResponse(cn, {
-            customer: cn.customer,
-            returnNumber: cn.return?.return_number,
-            invoiceNumber: cn.invoice?.invoice_number,
-            orderNumber: cn.order?.order_number,
-            items: cn.credit_note_items,
-        }),
+        creditNote: formatCreditNoteResponse(
+            {
+                id: ret.id,
+                credit_note_number: cnNumber,
+                store_id: ret.store_id,
+                return_id: ret.id,
+                invoice_id: null,
+                order_id: ret.order_id,
+                customer_id: ret.customer_id,
+                issue_date: ret.completed_at || ret.created_at,
+                reason: ret.reason,
+                refund_method: ret.refund_method,
+                subtotal: ret.subtotal,
+                tax_amount: ret.tax_amount,
+                total_amount: ret.refund_amount,
+                remaining_amount: ret.refund_amount,
+                status: "Issued",
+                notes: ret.notes,
+                issued_by: ret.processed_by || ret.requested_by,
+                created_at: ret.completed_at || ret.created_at,
+                updated_at: ret.updated_at,
+            },
+            {
+                customer: ret.customer,
+                returnNumber: ret.return_number,
+                orderNumber: ret.order?.order_number,
+                items: (ret.return_items || []).map((ri) => ({
+                    ...ri,
+                    line_total: roundCurrency(Number(ri.refund_amount || 0) + Number(ri.tax_amount || 0)),
+                })),
+            }
+        ),
         error: null,
     };
 }

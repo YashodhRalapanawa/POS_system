@@ -4,6 +4,8 @@ import Button from './ui/Button'
 const defaultForm = {
   name: '',
   email: '',
+  username: '',
+  password: '',
   employeeId: '',
   role: 'Cashier',
   roleId: null,
@@ -11,7 +13,12 @@ const defaultForm = {
   status: 'Active',
 }
 
-const defaultRoleList = ['Administrator', 'Manager', 'Cashier', 'Inventory Clerk', 'Accountant']
+const defaultRoleList = ['Admin', 'Manager', 'Cashier']
+
+function isAdminRoleName(name) {
+  const clean = String(name || '').trim().toLowerCase()
+  return clean === 'admin' || clean === 'administrator'
+}
 
 function UserFormModal({
   isOpen,
@@ -24,36 +31,47 @@ function UserFormModal({
   isSubmitting = false,
   externalError = '',
   canAssignRole = true,
+  isCurrentUserAdmin = false,
+  isEditingSelf = false,
 }) {
   const [formData, setFormData] = useState(defaultForm)
   const [error, setError] = useState('')
 
   const availableRoles = useMemo(() => {
-    if (!Array.isArray(roleOptions) || roleOptions.length === 0) {
-      return defaultRoleList.map((r, i) => ({ id: i + 1, name: r }))
-    }
+    const rawList =
+      !Array.isArray(roleOptions) || roleOptions.length === 0
+        ? defaultRoleList.map((r, i) => ({ id: i + 1, name: r, code: r }))
+        : roleOptions.map((r, i) => {
+            if (typeof r === 'object' && r !== null) {
+              return {
+                id: r.id ?? i + 1,
+                name: r.name,
+                code: r.code || r.name,
+              }
+            }
+            return { id: i + 1, name: r, code: r }
+          })
 
-    const normalized = roleOptions.map((r, i) => {
-      if (typeof r === 'object' && r !== null) {
-        return {
-          id: r.id ?? i + 1,
-          name: r.name,
-          code: r.code || r.name,
-        }
+    // Only an Admin can assign the Admin role to a user
+    const filtered = rawList.filter((r) => {
+      if (isAdminRoleName(r.name) && !isCurrentUserAdmin) {
+        const currentTargetRole =
+          typeof initialValues?.role === 'object' ? initialValues?.role?.name : initialValues?.role
+        return isAdminRoleName(currentTargetRole)
       }
-      return { id: i + 1, name: r, code: r }
+      return true
     })
 
-    if (initialValues?.role && !normalized.some((r) => r.name === initialValues.role)) {
-      normalized.push({
+    if (initialValues?.role && !filtered.some((r) => r.name === initialValues.role)) {
+      filtered.push({
         id: initialValues.roleId ?? 99,
         name: initialValues.role,
         code: initialValues.roleCode || initialValues.role,
       })
     }
 
-    return normalized
-  }, [roleOptions, initialValues])
+    return filtered
+  }, [roleOptions, initialValues, isCurrentUserAdmin])
 
   const normalizedInitialValues = useMemo(() => {
     if (!initialValues) return null
@@ -62,6 +80,8 @@ function UserFormModal({
       ...defaultForm,
       ...initialValues,
       name: initialValues.fullName || initialValues.name || '',
+      username: initialValues.username || '',
+      password: '',
       employeeId: initialValues.employeeCode || initialValues.employeeId || '',
       role: typeof initialValues.role === 'object' ? initialValues.role?.name : initialValues.role || 'Cashier',
       roleId: typeof initialValues.role === 'object' ? initialValues.role?.id : initialValues.roleId || null,
@@ -115,6 +135,8 @@ function UserFormModal({
 
     const cleanedName = formData.name.trim()
     const cleanedEmail = formData.email.trim()
+    const cleanedUsername = (formData.username || '').trim()
+    const cleanedPassword = formData.password || ''
     const cleanedEmployeeId = formData.employeeId.trim()
 
     if (!cleanedName) {
@@ -129,6 +151,11 @@ function UserFormModal({
 
     if (!/^\S+@\S+\.\S+$/.test(cleanedEmail)) {
       setError('Please enter a valid email address.')
+      return
+    }
+
+    if (mode === 'add' && cleanedPassword && cleanedPassword.length < 8) {
+      setError('Initial password must be at least 8 characters long.')
       return
     }
 
@@ -161,6 +188,8 @@ function UserFormModal({
       fullName: cleanedName,
       name: cleanedName,
       email: cleanedEmail,
+      username: cleanedUsername,
+      password: cleanedPassword,
       employeeCode: cleanedEmployeeId,
       employeeId: cleanedEmployeeId,
       role: formData.role,
@@ -213,6 +242,31 @@ function UserFormModal({
               />
             </label>
 
+            {mode === 'add' && (
+              <>
+                <label>
+                  <span>Username (Optional)</span>
+                  <input
+                    value={formData.username}
+                    onChange={(event) => updateField('username', event.target.value)}
+                    placeholder="sarah_j"
+                    disabled={isSubmitting}
+                  />
+                </label>
+
+                <label>
+                  <span>Initial Password</span>
+                  <input
+                    type="password"
+                    value={formData.password}
+                    onChange={(event) => updateField('password', event.target.value)}
+                    placeholder="Min. 8 characters (for immediate login)"
+                    disabled={isSubmitting}
+                  />
+                </label>
+              </>
+            )}
+
             <label>
               <span>Employee ID</span>
               <input
@@ -229,8 +283,14 @@ function UserFormModal({
               <select
                 value={formData.role}
                 onChange={(event) => handleRoleChange(event.target.value)}
-                disabled={isSubmitting || !canAssignRole}
-                title={!canAssignRole ? "Requires users.assign_role permission" : undefined}
+                disabled={isSubmitting || !canAssignRole || isEditingSelf}
+                title={
+                  isEditingSelf
+                    ? 'You cannot change your own Administrator role'
+                    : !canAssignRole
+                    ? 'Requires users.assign_role permission'
+                    : undefined
+                }
               >
                 {availableRoles.map((role) => (
                   <option key={role.id || role.name} value={role.name}>
@@ -261,7 +321,8 @@ function UserFormModal({
               <select
                 value={formData.status}
                 onChange={(event) => updateField('status', event.target.value)}
-                disabled={isSubmitting}
+                disabled={isSubmitting || isEditingSelf}
+                title={isEditingSelf ? 'You cannot deactivate your own account' : undefined}
               >
                 <option value="Active">Active</option>
                 <option value="Inactive">Inactive</option>
