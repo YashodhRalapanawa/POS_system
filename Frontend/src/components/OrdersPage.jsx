@@ -19,7 +19,7 @@ function loadInitialOrders() {
       const parsed = JSON.parse(saved)
       if (Array.isArray(parsed)) return parsed
     }
-  } catch {}
+  } catch { }
   return []
 }
 
@@ -97,7 +97,7 @@ function OrdersPage() {
         setOrders(orderList)
         try {
           localStorage.setItem(ORDERS_STORAGE_KEY, JSON.stringify(orderList))
-        } catch {}
+        } catch { }
         if (res.data.data?.pagination) {
           setPagination(res.data.data.pagination)
         } else {
@@ -153,7 +153,7 @@ function OrdersPage() {
           const updated = current.map((ord) => (ord.id === orderToCancel.id ? { ...ord, status: 'Cancelled', cancelReason } : ord))
           try {
             localStorage.setItem(ORDERS_STORAGE_KEY, JSON.stringify(updated))
-          } catch {}
+          } catch { }
           return updated
         })
         showNotification(`Draft order ${orderToCancel.orderNumber || orderToCancel.id} was cancelled successfully.`)
@@ -167,7 +167,7 @@ function OrdersPage() {
         const updated = current.map((ord) => (ord.id === orderToCancel.id ? { ...ord, status: 'Cancelled', cancelReason } : ord))
         try {
           localStorage.setItem(ORDERS_STORAGE_KEY, JSON.stringify(updated))
-        } catch {}
+        } catch { }
         return updated
       })
       showNotification(`Draft order ${orderToCancel.orderNumber || orderToCancel.id} was cancelled successfully.`)
@@ -194,7 +194,7 @@ function OrdersPage() {
           const updated = current.map((ord) => (ord.id === orderToComplete.id ? { ...ord, status: 'Completed', completedAt: new Date().toISOString() } : ord))
           try {
             localStorage.setItem(ORDERS_STORAGE_KEY, JSON.stringify(updated))
-          } catch {}
+          } catch { }
           return updated
         })
         showNotification(`Order ${orderToComplete.orderNumber || orderToComplete.id} completed successfully! Stock deducted.`)
@@ -208,7 +208,7 @@ function OrdersPage() {
         const updated = current.map((ord) => (ord.id === orderToComplete.id ? { ...ord, status: 'Completed', completedAt: new Date().toISOString() } : ord))
         try {
           localStorage.setItem(ORDERS_STORAGE_KEY, JSON.stringify(updated))
-        } catch {}
+        } catch { }
         return updated
       })
       showNotification(`Order ${orderToComplete.orderNumber || orderToComplete.id} completed successfully! Stock deducted.`)
